@@ -64,7 +64,7 @@ export default function RegisterPage() {
 
       const userData = {
         firstname: user.displayName?.split(" ")[0] || "",
-        lastname: user.displayName?.split(" ")[1] || "",
+        lastname: user.displayName?.split(" ")[1] || "N/A",
         email: user.email,
         password: "N/A", // Google sign-in doesn't require a password
         college: "N/A", // You might want to ask this later or skip
