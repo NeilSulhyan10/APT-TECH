@@ -1,15 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/config/firebase';
 import {
-  collection,
-  addDoc,
-  getDocs,
   doc,
   getDoc,
   updateDoc,
   deleteDoc,
-  query,
-  where,
 } from 'firebase/firestore';
 
 export async function GETById(id: string) {
