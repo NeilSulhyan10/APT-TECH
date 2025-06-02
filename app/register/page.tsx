@@ -8,10 +8,13 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
 import Link from "next/link"
+import { auth, provider } from "@/config/firebase"
+import { signInWithPopup } from "firebase/auth"
 
 export default function RegisterPage() {
   const [agree, setAgree] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [googleLoading, setGoogleLoading] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -53,6 +56,42 @@ export default function RegisterPage() {
     }
   }
 
+  const handleGoogleSignIn = async () => {
+    setGoogleLoading(true)
+    try {
+      const result = await signInWithPopup(auth, provider)
+      const user = result.user
+
+      const userData = {
+        firstname: user.displayName?.split(" ")[0] || "",
+        lastname: user.displayName?.split(" ")[1] || "",
+        email: user.email,
+        password: "N/A", // Google sign-in doesn't require a password
+        college: "N/A", // You might want to ask this later or skip
+        year_of_study: "N/A",  // You might want to ask this later or skip
+        id: user.uid
+      }
+
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(userData)
+      })
+
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "Failed to register with Google")
+
+      alert("✅ Signed in with Google successfully!")
+      // Redirect or update UI as needed
+    } catch (error: any) {
+      alert("❌ Google sign-in failed: " + error.message)
+    } finally {
+      setGoogleLoading(false)
+    }
+  }
+
   return (
     <div className="container flex items-center justify-center min-h-[calc(100vh-4rem)] py-8 px-4">
       <Card className="w-full max-w-md">
@@ -88,14 +127,17 @@ export default function RegisterPage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="year">Year of Study</Label>
-              <Select name="year" onValueChange={(value) => {
-                const event = new Event("input", { bubbles: true })
-                const hiddenInput = document.querySelector("input[name='year']") as HTMLInputElement
-                if (hiddenInput) {
-                  hiddenInput.value = value
-                  hiddenInput.dispatchEvent(event)
-                }
-              }}>
+              <Select
+                name="year"
+                onValueChange={(value) => {
+                  const event = new Event("input", { bubbles: true })
+                  const hiddenInput = document.querySelector("input[name='year']") as HTMLInputElement
+                  if (hiddenInput) {
+                    hiddenInput.value = value
+                    hiddenInput.dispatchEvent(event)
+                  }
+                }}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Select year" />
                 </SelectTrigger>
@@ -110,7 +152,11 @@ export default function RegisterPage() {
               <input type="hidden" name="year" />
             </div>
             <div className="flex items-center space-x-2">
-              <Checkbox id="terms" checked={agree} onCheckedChange={(checked) => setAgree(!!checked)} />
+              <Checkbox
+                id="terms"
+                checked={agree}
+                onCheckedChange={(checked) => setAgree(!!checked)}
+              />
               <Label htmlFor="terms" className="text-sm">
                 I agree to the{" "}
                 <Link href="/terms" className="text-primary hover:underline">
@@ -123,6 +169,18 @@ export default function RegisterPage() {
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? "Signing Up..." : "Sign Up"}
             </Button>
+
+            {/* Google Sign In Button */}
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              onClick={handleGoogleSignIn}
+              disabled={googleLoading}
+            >
+              {googleLoading ? "Signing in with Google..." : "Sign up with Google"}
+            </Button>
+
             <div className="text-center text-sm">
               Already have an account?{" "}
               <Link href="/login" className="text-primary hover:underline">
