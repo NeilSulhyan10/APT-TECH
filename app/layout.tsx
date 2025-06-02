@@ -1,36 +1,48 @@
-import type React from "react"
-import type { Metadata } from "next"
-import { Inter } from "next/font/google"
-import "./globals.css"
-import { ThemeProvider } from "@/components/theme-provider"
-import Navbar from "@/components/navbar"
-import Footer from "@/components/footer"
-import Chatbot from "@/components/chatbot"
-import PWAInstaller from "@/components/pwa-installer"
-import OfflineBanner from "@/components/offline-banner"
-import RegisterServiceWorker from "./register-sw"
-import { Toaster } from "@/components/ui/toaster"
+import type React from "react";
+import type { Metadata, Viewport } from "next";
+import { Inter } from "next/font/google";
+import "./globals.css";
+import { ThemeProvider } from "@/components/theme-provider";
+import Navbar from "@/components/navbar";
+import Footer from "@/components/footer";
+import Chatbot from "@/components/chatbot";
+import PWAInstaller from "@/components/pwa-installer";
+import OfflineBanner from "@/components/offline-banner";
+import RegisterServiceWorker from "./register-sw";
+import { Toaster } from "@/components/ui/toaster";
 
-const inter = Inter({ subsets: ["latin"] })
+const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "APT-TECH Connect | Student-Expert Engagement Platform",
-  description: "Connect with industry professionals, resolve doubts, and build your career with APT-TECH experts",
+  description:
+    "Connect with industry professionals, resolve doubts, and build your career with APT-TECH experts",
   manifest: "/manifest.json",
+  generator: "v0.dev",
+};
+
+// Move viewport and themeColor to generateViewport
+export const viewport: Viewport = {
   themeColor: "#3b82f6",
-  viewport: "width=device-width, initial-scale=1, maximum-scale=1",
-    generator: 'v0.dev'
-}
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+};
 
 export default function RootLayout({
   children,
 }: Readonly<{
-  children: React.ReactNode
+  children: React.ReactNode;
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
-        <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="light"
+          enableSystem
+          disableTransitionOnChange
+        >
           <div className="flex flex-col min-h-screen">
             <Navbar />
             <main className="flex-1">{children}</main>
@@ -44,5 +56,5 @@ export default function RootLayout({
         </ThemeProvider>
       </body>
     </html>
-  )
+  );
 }
