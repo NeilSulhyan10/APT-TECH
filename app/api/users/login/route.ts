@@ -1,17 +1,26 @@
 // app/api/users/login/route.ts
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server'; // Import NextRequest
 import admin from '@/app/firebase/admin';
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) { // Ensure 'req' is typed as NextRequest
   try {
-    const { token } = await req.json();
+    // 1. Get the Authorization header from the incoming request
+    const authorizationHeader = req.headers.get('Authorization');
 
-    // Verify the Firebase ID token
+    // 2. Validate the header: Check if it exists and starts with 'Bearer '
+    if (!authorizationHeader || !authorizationHeader.startsWith('Bearer ')) {
+      // If no valid header is found, return an unauthorized response
+      return NextResponse.json({ message: 'Unauthorized: No Bearer token provided.' }, { status: 401 });
+    }
+
+    // 3. Extract the token string: Remove the 'Bearer ' prefix
+    const token = authorizationHeader.split('Bearer ')[1];
+
+    // 4. Now, 'token' holds your Firebase ID token, which you can verify
     const decodedToken = await admin.auth().verifyIdToken(token);
 
-    // Here you can optionally check user roles or perform other logic.
+    // ... (rest of your logic for successful login) ...
 
-    // For demonstration, just send back the user info
     return NextResponse.json({
       message: 'Login successful',
       user: {
@@ -22,6 +31,6 @@ export async function POST(req: Request) {
     });
   } catch (error) {
     console.error('Error verifying Firebase ID token:', error);
-    return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    return NextResponse.json({ message: 'Authentication failed. Invalid token or server error.' }, { status: 401 });
   }
 }
