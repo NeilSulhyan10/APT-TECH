@@ -23,7 +23,8 @@ import {
   signInWithPopup,
   setPersistence, // Import setPersistence
   browserSessionPersistence, // Import session persistence option
-  browserLocalPersistence, // Import local persistence option
+  browserLocalPersistence,
+  signOut, // Import local persistence option
 } from "firebase/auth";
 
 export default function LoginPage() {
