@@ -10,15 +10,15 @@ import { Checkbox } from "@/components/ui/checkbox";
 import Link from "next/link";
 
 // Import necessary Firebase Auth functions and your auth instance/provider
-import { auth, provider } from '@/config/firebase'; // Assuming 'provider' (GoogleAuthProvider) is exported from here
-import { signInWithEmailAndPassword, signInWithPopup } from "firebase/auth"; // signInWithPopup for OAuth
+import { auth, provider } from '@/config/firebase';
+import { signInWithEmailAndPassword, signInWithPopup } from "firebase/auth";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false); // New state for Google button loading
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   const router = useRouter();
 
@@ -37,14 +37,17 @@ export default function LoginPage() {
       const token = await user.getIdToken();
       console.log("Firebase ID Token (Email/Password):", token);
 
-      // Send the token to your backend for verification
+      // --- CHANGE START ---
+      // Send the token to your backend for verification in the Authorization header
       const response = await fetch("/api/users/login", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
+          "Content-Type": "application/json", // Still include this if your backend expects JSON body (even if empty)
+          "Authorization": `Bearer ${token}`, // Pass token in Authorization header
         },
-        body: JSON.stringify({ token }),
+        // No 'body' needed here as the token is in the header
       });
+      // --- CHANGE END ---
 
       if (!response.ok) {
         const errorData = await response.json();
@@ -63,7 +66,6 @@ export default function LoginPage() {
 
     } catch (err: any) {
       console.error("Login error:", err);
-      // More specific error messages for user feedback
       if (err.code === 'auth/invalid-email') {
         setError('The email address is not valid.');
       } else if (err.code === 'auth/user-disabled') {
@@ -80,29 +82,31 @@ export default function LoginPage() {
     }
   };
 
-  // NEW: Google Login Handler
+  // Google Login Handler
   const handleGoogleLogin = async () => {
-    setGoogleLoading(true); // Start loading state for Google button
-    setError(null); // Clear any previous errors
+    setGoogleLoading(true);
+    setError(null);
 
     try {
-      // 1. Initiate Google sign-in popup
+      // Initiate Google sign-in popup
       const result = await signInWithPopup(auth, provider);
-      const user = result.user; // User object from successful Google sign-in
+      const user = result.user;
 
-      // 2. Get the Firebase ID token for the Google-signed-in user
+      // Get the Firebase ID token
       const token = await user.getIdToken();
       console.log("Firebase ID Token (Google):", token);
 
-      // 3. Send the token to your backend for verification
-      // (Your existing /api/users/login endpoint will work perfectly here!)
+      // --- CHANGE START ---
+      // Send the token to your backend for verification in the Authorization header
       const response = await fetch("/api/users/login", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
+          "Content-Type": "application/json", // Still include this if your backend expects JSON body (even if empty)
+          "Authorization": `Bearer ${token}`, // Pass token in Authorization header
         },
-        body: JSON.stringify({ token }),
+        // No 'body' needed here as the token is in the header
       });
+      // --- CHANGE END ---
 
       if (!response.ok) {
         const errorData = await response.json();
@@ -112,16 +116,15 @@ export default function LoginPage() {
       const data = await response.json();
       console.log("Backend verification successful for Google user:", data);
 
-      // 4. Store the token and user info
+      // Store the token and user info
       localStorage.setItem("authToken", token);
       localStorage.setItem("userInfo", JSON.stringify(data.user));
 
-      // 5. Redirect to dashboard
+      // Redirect
       router.push("/");
 
     } catch (err: any) {
       console.error("Google login error:", err);
-      // Specific error handling for Google sign-in
       if (err.code === 'auth/popup-closed-by-user') {
         setError('Google sign-in cancelled.');
       } else if (err.code === 'auth/cancelled-popup-request') {
@@ -132,14 +135,13 @@ export default function LoginPage() {
         setError(err.message || "An unexpected error occurred during Google login.");
       }
     } finally {
-      setGoogleLoading(false); // End loading state
+      setGoogleLoading(false);
     }
   };
 
   return (
     <div className="container flex items-center justify-center min-h-[calc(100vh-4rem)] py-8 px-4">
       <Card className="w-full max-w-md">
-        {/* Attach the email/password handler to the form */}
         <form onSubmit={handleEmailPasswordLogin}>
           <CardHeader className="space-y-1">
             <CardTitle className="text-2xl font-bold text-center">Welcome back</CardTitle>
@@ -188,9 +190,8 @@ export default function LoginPage() {
               {loading ? "Signing In..." : "Sign In"}
             </Button>
 
-            {/* NEW: Google Sign-in Button */}
             <Button
-              type="button" // Important: set type="button" to prevent form submission
+              type="button"
               variant="outline"
               className="w-full"
               onClick={handleGoogleLogin}
