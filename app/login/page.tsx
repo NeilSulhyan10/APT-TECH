@@ -15,22 +15,21 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "next/link";
-
+import { signOut } from "firebase/auth";
 // Import necessary Firebase Auth functions and your auth instance/provider
 import { auth, provider } from "@/config/firebase";
 import {
   signInWithEmailAndPassword,
   signInWithPopup,
-  setPersistence, // Import setPersistence
-  browserSessionPersistence, // Import session persistence option
+  setPersistence,
+  browserSessionPersistence,
   browserLocalPersistence,
-  signOut, // Import local persistence option
 } from "firebase/auth";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [rememberMe, setRememberMe] = useState(false); // New state for 'Remember me' checkbox
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
@@ -62,17 +61,33 @@ export default function LoginPage() {
       const data = await response.json();
       console.log("Backend verification successful:", data);
 
+      // --- START CHANGE ---
+      // Backend returns 'name', but Navbar expects 'firstName' for display.
+      // Parse 'name' into 'firstName' and 'lastName' here for consistent local storage.
+      const userDisplayName = data.user.name || "";
+      const nameParts = userDisplayName.split(" ");
+      const firstName = nameParts[0] || "";
+      const lastName = nameParts.slice(1).join(" ") || "";
+
+      const userInfoToStore = {
+        uid: data.user.uid,
+        email: data.user.email,
+        firstName: firstName, // Store parsed first name
+        lastName: lastName, // Store parsed last name
+        // Include any other user data from 'data.user' if available from backend
+        // e.g., college, year_of_study if your backend passes it back after login
+      };
+      // --- END CHANGE ---
+
       // Store the token and user info
       localStorage.setItem("authToken", token);
-      localStorage.setItem("userInfo", JSON.stringify(data.user));
+      localStorage.setItem("userInfo", JSON.stringify(userInfoToStore));
 
       // Redirect
       router.push("/"); // Redirect to home or dashboard
     } catch (err: any) {
       console.error("Post-auth process error:", err);
-      // If there's an error after successful Firebase auth but before backend verification,
-      // it's good to sign out the user from Firebase to avoid a partial login state.
-      signOut(auth);
+      signOut(auth); // Sign out if there's an error after Firebase Auth success
       localStorage.removeItem("authToken");
       localStorage.removeItem("userInfo");
       setError(
@@ -89,21 +104,16 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      // --- NEW: Set Firebase persistence based on 'rememberMe' state ---
       await setPersistence(
         auth,
         rememberMe ? browserLocalPersistence : browserSessionPersistence
       );
-
-      // Authenticate with Firebase using email and password
       const userCredential = await signInWithEmailAndPassword(
         auth,
         email,
         password
       );
-      const user = userCredential.user;
-
-      await handleSuccessfulLogin(user); // Call common logic
+      await handleSuccessfulLogin(userCredential.user);
     } catch (err: any) {
       console.error("Login error:", err);
       if (err.code === "auth/invalid-email") {
@@ -132,17 +142,12 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      // --- NEW: Set Firebase persistence based on 'rememberMe' state ---
       await setPersistence(
         auth,
         rememberMe ? browserLocalPersistence : browserSessionPersistence
       );
-
-      // Initiate Google sign-in popup
       const result = await signInWithPopup(auth, provider);
-      const user = result.user;
-
-      await handleSuccessfulLogin(user); // Call common logic
+      await handleSuccessfulLogin(result.user);
     } catch (err: any) {
       console.error("Google login error:", err);
       if (err.code === "auth/popup-closed-by-user") {
@@ -208,8 +213,8 @@ export default function LoginPage() {
             <div className="flex items-center space-x-2">
               <Checkbox
                 id="remember"
-                checked={rememberMe} // Bind checkbox to state
-                onCheckedChange={(checked) => setRememberMe(!!checked)} // Update state on change
+                checked={rememberMe}
+                onCheckedChange={(checked) => setRememberMe(!!checked)}
               />
               <Label
                 htmlFor="remember"
