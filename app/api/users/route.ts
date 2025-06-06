@@ -13,40 +13,27 @@ const usersCollectionRef = collection(db, 'users');
 /**
  * Handles POST requests to /api/users
  * Used for creating a new user profile document in Firestore after Firebase Authentication.
+ * This now includes handling the user's chosen role and initial status.
  */
 export async function POST(request: NextRequest) {
-  console.log("Backend: POST /api/users route hit!"); // Debugging log
+  console.log("Backend: POST /api/users route hit (User Profile Creation)");
 
   try {
-    // Read the raw request body and parse it as JSON
     const rawBody = await request.text();
-    console.log("Backend: Raw Request Body:", rawBody);
     const parsedBody = JSON.parse(rawBody);
 
-    // Destructure the expected user profile data from the parsed body
-    const { uid, email, firstName, lastName, college, year_of_study, ...otherProfileData } = parsedBody;
-
-    // Debugging: Log the destructured variables to confirm values
-    // console.log("Backend: Destructured Data for POST:");
-    // console.log("  UID:", uid);
-    // console.log("  Email:", email);
-    // console.log("  First Name:", firstName);
-    // console.log("  Last Name:", lastName);
-    // console.log("  College:", college);
-    // console.log("  Year of Study:", year_of_study);
-    // console.log("  Other Data:", otherProfileData);
+    const { uid, email, firstName, lastName, college, year_of_study, role, ...otherProfileData } = parsedBody;
 
     // Basic Server-Side Validation: Ensure essential profile data is present
-    if (!uid || !email || !firstName || !lastName) {
+    if (!uid || !email || !firstName || !lastName || !role) {
       console.error("Backend Validation Failed: Missing required fields for user profile creation.");
       return NextResponse.json(
-        { error: 'Missing required user profile data (uid, email, firstName, or lastName).' },
+        { error: 'Missing required user profile data (uid, email, firstName, lastName, or role).' },
         { status: 400 }
       );
     }
 
     // Firebase ID Token Verification for Security:
-    // This ensures the request comes from an authenticated user and prevents unauthorized profile creation.
     const authorizationHeader = request.headers.get('Authorization');
     if (!authorizationHeader || !authorizationHeader.startsWith('Bearer ')) {
       console.error("Backend Auth Failed: No Bearer token provided in Authorization header.");
@@ -76,30 +63,39 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Determine initial status based on role
+    let initialStatus: 'pending' | 'approved' = 'approved';
+    if (role === 'expert' || role === 'admin') { // Admins can also be 'pending' if applied through a form
+        initialStatus = 'pending';
+    }
+
+    const userProfileData = {
+        uid,
+        email,
+        firstName,
+        lastName,
+        college,
+        year_of_study,
+        role,           // Store the chosen role
+        status: initialStatus, // Store the initial status
+        createdAt: new Date().toISOString(), // Timestamp for when the profile was created
+        ...otherProfileData // Include any other data passed from the frontend
+    };
+
+
     // Save User Profile Data to Firestore:
-    // The user's Firebase Auth UID is used as the document ID for their profile in the 'users' collection.
     const userProfileRef = doc(db, 'users', uid);
-    await setDoc(userProfileRef, {
-      uid, // Store UID explicitly within the document
-      email,
-      firstName,
-      lastName,
-      college,
-      year_of_study,
-      createdAt: new Date().toISOString(), // Timestamp for when the profile was created
-      ...otherProfileData // Include any other data passed from the frontend
-    }, { merge: true }); // Use merge: true to avoid overwriting if a document for this UID already exists
+    await setDoc(userProfileRef, userProfileData, { merge: true }); // Use merge: true to avoid overwriting
 
     // Respond with success
-    console.log(`User profile for UID: ${uid} created/updated successfully in Firestore.`);
+    console.log(`User profile for UID: ${uid} created/updated successfully in Firestore with role: ${role} and status: ${initialStatus}.`);
     return NextResponse.json(
-      { message: 'User profile created/updated successfully in Firestore.', uid },
+      { message: 'User profile created/updated successfully in Firestore.', uid, role, status: initialStatus },
       { status: 201 }
     );
 
   } catch (error) {
     console.error('Error in POST /api/users:', error);
-    // Provide a generic error message to the client for security
     return NextResponse.json(
       { error: (error as Error).message || 'An unexpected error occurred on the server.' },
       { status: 500 }
@@ -110,16 +106,40 @@ export async function POST(request: NextRequest) {
 /**
  * Handles GET requests to /api/users
  * Used for fetching all user profiles from Firestore.
+ * This endpoint should ideally be protected for admin use.
  */
-export async function GET() {
-  console.log("Backend: GET /api/users route hit!"); // Debugging log
+export async function GET(request: NextRequest) {
+  console.log("Backend: GET /api/users route hit (Fetch All Users)"); // Debugging log
   try {
+    // --- START: Admin Authentication and Authorization Check for GET /api/users ---
+    const authorizationHeader = request.headers.get('Authorization');
+    if (!authorizationHeader || !authorizationHeader.startsWith('Bearer ')) {
+      console.error("Backend Auth Failed: No Bearer token provided for fetching all users.");
+      return NextResponse.json({ error: 'Unauthorized: No Firebase ID token provided.' }, { status: 401 });
+    }
+    const idToken = authorizationHeader.split('Bearer ')[1];
+
+    let decodedToken;
+    try {
+      decodedToken = await admin.auth().verifyIdToken(idToken);
+      // Ensure the requesting user has the 'admin' role
+      if (decodedToken.role !== 'admin') {
+        console.error("Backend Auth Failed: User is not an admin. Role:", decodedToken.role);
+        return NextResponse.json({ error: 'Forbidden: Only administrators can view all users.' }, { status: 403 });
+      }
+    } catch (tokenError) {
+      console.error('Error verifying Firebase ID token for fetching all users:', tokenError);
+      return NextResponse.json({ error: 'Unauthorized: Invalid or expired Firebase ID token.' }, { status: 401 });
+    }
+    // --- END: Admin Authentication and Authorization Check ---
+
+
     const snapshot = await getDocs(usersCollectionRef);
     const users = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     console.log(`Fetched ${users.length} user profiles.`);
     return NextResponse.json(users, { status: 200 });
   } catch (error) {
     console.error('Error in GET /api/users:', error);
-    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+    return NextResponse.json({ error: (error as Error).message || 'An unexpected error occurred.' }, { status: 500 });
   }
 }

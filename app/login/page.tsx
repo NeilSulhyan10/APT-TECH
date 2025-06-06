@@ -1,119 +1,59 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react"; // Ensure useEffect is imported
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "next/link";
-import { signOut } from "firebase/auth";
-// Import necessary Firebase Auth functions and your auth instance/provider
+
 import { auth, provider } from "@/config/firebase";
-import {
-  signInWithEmailAndPassword,
-  signInWithPopup,
-  setPersistence,
-  browserSessionPersistence,
-  browserLocalPersistence,
-} from "firebase/auth";
+import { signInWithEmailAndPassword, signInWithPopup } from "firebase/auth";
+import { useAuth } from "@/context/AuthContext"; // Import useAuth hook
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 
   const router = useRouter();
+  const { user, userProfile, loading: authLoading } = useAuth(); // Get auth state from context
 
-  // Helper function to handle common login logic after Firebase Auth succeeds
-  const handleSuccessfulLogin = async (user: any) => {
-    try {
-      const token = await user.getIdToken();
-      console.log("Firebase ID Token obtained:", token);
-
-      // Send the token to your backend for verification (in the Authorization header)
-      const response = await fetch("/api/users/login", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(
-          errorData.message || "Login failed on backend verification."
-        );
+  // Redirect if already authenticated and profile loaded
+  // This useEffect will be triggered by AuthContext updates after successful login
+  useEffect(() => {
+    // Only proceed if AuthContext has finished its initial loading of user and profile
+    if (!authLoading && user && userProfile) {
+      if (userProfile.role === "admin") {
+        router.push("/admin/dashboard");
+      } else if (userProfile.role === "expert") {
+        router.push("/expert/dashboard");
+      } else {
+        router.push("/user/dashboard"); // Default for regular users
       }
-
-      const data = await response.json();
-      console.log("Backend verification successful:", data);
-
-      // --- START CHANGE ---
-      // Backend returns 'name', but Navbar expects 'firstName' for display.
-      // Parse 'name' into 'firstName' and 'lastName' here for consistent local storage.
-      const userDisplayName = data.user.name || "";
-      const nameParts = userDisplayName.split(" ");
-      const firstName = nameParts[0] || "";
-      const lastName = nameParts.slice(1).join(" ") || "";
-
-      const userInfoToStore = {
-        uid: data.user.uid,
-        email: data.user.email,
-        firstName: firstName, // Store parsed first name
-        lastName: lastName, // Store parsed last name
-        // Include any other user data from 'data.user' if available from backend
-        // e.g., college, year_of_study if your backend passes it back after login
-      };
-      // --- END CHANGE ---
-
-      // Store the token and user info
-      localStorage.setItem("authToken", token);
-      localStorage.setItem("userInfo", JSON.stringify(userInfoToStore));
-
-      // Redirect
-      router.push("/"); // Redirect to home or dashboard
-    } catch (err: any) {
-      console.error("Post-auth process error:", err);
-      signOut(auth); // Sign out if there's an error after Firebase Auth success
-      localStorage.removeItem("authToken");
-      localStorage.removeItem("userInfo");
-      setError(
-        err.message ||
-          "An error occurred after authentication. Please try again."
-      );
     }
-  };
+  }, [user, userProfile, authLoading, router]); // Dependencies: changes in user, userProfile, authLoading, or router trigger this effect
 
-  // Email/Password Login Handler
   const handleEmailPasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
 
     try {
-      await setPersistence(
-        auth,
-        rememberMe ? browserLocalPersistence : browserSessionPersistence
-      );
-      const userCredential = await signInWithEmailAndPassword(
-        auth,
-        email,
-        password
-      );
-      await handleSuccessfulLogin(userCredential.user);
+      // 1. Authenticate user with Firebase
+      // AuthContext's onAuthStateChanged listener will detect this success,
+      // fetch the user's profile, update global state, and trigger the useEffect above for redirection.
+      await signInWithEmailAndPassword(auth, email, password);
+
+      console.log("Firebase Auth (Email/Password) successful. AuthContext will handle profile fetching & redirection.");
+
+      // Removed direct localStorage updates and router.push calls here
+      // The AuthContext and its useEffect will manage the state and navigation flow.
+
     } catch (err: any) {
       console.error("Login error:", err);
       if (err.code === "auth/invalid-email") {
@@ -132,22 +72,25 @@ export default function LoginPage() {
         setError(err.message || "An unexpected error occurred during login.");
       }
     } finally {
-      setLoading(false);
+      setLoading(false); // Reset loading state regardless of success or failure
     }
   };
 
-  // Google Login Handler
   const handleGoogleLogin = async () => {
     setGoogleLoading(true);
     setError(null);
 
     try {
-      await setPersistence(
-        auth,
-        rememberMe ? browserLocalPersistence : browserSessionPersistence
-      );
-      const result = await signInWithPopup(auth, provider);
-      await handleSuccessfulLogin(result.user);
+      // 1. Authenticate user with Google using Firebase popup
+      // AuthContext's onAuthStateChanged listener will detect this success,
+      // fetch the user's profile, update global state, and trigger the useEffect above for redirection.
+      await signInWithPopup(auth, provider);
+
+      console.log("Firebase Auth (Google) successful. AuthContext will handle profile fetching & redirection.");
+
+      // Removed direct localStorage updates and router.push calls here
+      // The AuthContext and its useEffect will manage the state and navigation flow.
+
     } catch (err: any) {
       console.error("Google login error:", err);
       if (err.code === "auth/popup-closed-by-user") {
@@ -164,7 +107,7 @@ export default function LoginPage() {
         );
       }
     } finally {
-      setGoogleLoading(false);
+      setGoogleLoading(false); // Reset loading state regardless of success or failure
     }
   };
 
@@ -211,11 +154,7 @@ export default function LoginPage() {
               />
             </div>
             <div className="flex items-center space-x-2">
-              <Checkbox
-                id="remember"
-                checked={rememberMe}
-                onCheckedChange={(checked) => setRememberMe(!!checked)}
-              />
+              <Checkbox id="remember" />
               <Label
                 htmlFor="remember"
                 className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"

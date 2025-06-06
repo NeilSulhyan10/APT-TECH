@@ -9,8 +9,7 @@ import { Button } from "@/components/ui/button";
 import Link from 'next/link';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 
-// Define the shape of your UserProfile stored in Firestore
-// This should match the interface in AuthContext.tsx
+// Ensure this UserProfile interface matches the one in AuthContext.tsx
 interface UserProfile {
     uid: string;
     email: string;
@@ -18,56 +17,70 @@ interface UserProfile {
     lastName: string;
     role: string; // 'user', 'expert', 'admin'
     status?: 'pending' | 'approved' | 'rejected';
-    createdAt?: string;
+    createdAt?: string; // ISO string
     // Add any other profile fields you store
 }
 
-// Interface for admin activity logs
+// Interface for admin activity logs, must match backend schema
 interface AdminActivity {
     id: string;
     adminUid: string;
     adminEmail: string;
-    action: string;
+    action: string; // e.g., 'approve_expert', 'reject_expert', 'assign_admin_role'
     targetUid: string;
     targetEmail: string;
-    targetRole: string;
+    targetRole: string; // Role of the target user
     targetFirstName: string;
     targetLastName: string;
-    timestamp: string;
+    timestamp: string; // ISO string
 }
 
 export default function AdminDashboardPage() {
     const router = useRouter();
-    const { user, userProfile, loading, error: authError, logout } = useAuth(); // Use the useAuth hook
+    // Destructure properties from useAuth hook
+    const { user, userProfile, loading: authLoading, error: authError, logout } = useAuth();
+    
+    // States for dashboard-specific data
     const [otherAdmins, setOtherAdmins] = useState<UserProfile[]>([]);
     const [adminActivities, setAdminActivities] = useState<AdminActivity[]>([]);
-    const [dashboardError, setDashboardError] = useState<string | null>(null); // Specific error for dashboard content fetching
+    const [dashboardDataLoading, setDashboardDataLoading] = useState(false); // Separate loading for dashboard data
+    const [dashboardDataError, setDashboardDataError] = useState<string | null>(null); // Separate error for dashboard data
 
     // Function to fetch all users and filter for other admins
     const fetchOtherAdmins = async (currentAdminUid: string) => {
         try {
-            const response = await fetch('/api/users');
+            const authToken = localStorage.getItem('authToken'); // Get auth token for protected API
+            if (!authToken) {
+                setDashboardDataError("Authentication token missing for fetching other admins.");
+                return;
+            }
+
+            const response = await fetch('/api/users', {
+                headers: { 'Authorization': `Bearer ${authToken}` } // Send token for admin check
+            });
+
             if (!response.ok) {
-                throw new Error('Failed to fetch all users.');
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to fetch all users.');
             }
             const allUsers: UserProfile[] = await response.json();
+            // Filter out the current admin and non-admin roles
             const filteredAdmins = allUsers.filter(
-                (user: UserProfile) => user.role === 'admin' && user.uid !== currentAdminUid
+                (u: UserProfile) => u.role === 'admin' && u.uid !== currentAdminUid
             );
             setOtherAdmins(filteredAdmins);
         } catch (err: any) {
             console.error("Error fetching other admins:", err);
-            setDashboardError(`Failed to load other administrators: ${err.message}`);
+            setDashboardDataError(`Failed to load other administrators: ${err.message}`);
         }
     };
 
     // Function to fetch admin activity logs from the backend API
     const fetchAdminActivities = async () => {
         try {
-            const authToken = localStorage.getItem('authToken'); // Auth token should be reliable now
+            const authToken = localStorage.getItem('authToken');
             if (!authToken) {
-                console.error("Auth token missing for fetching admin activities.");
-                setDashboardError("Authentication required to fetch activity logs.");
+                setDashboardDataError("Authentication required to fetch activity logs.");
                 return;
             }
 
@@ -86,22 +99,22 @@ export default function AdminDashboardPage() {
 
         } catch (err: any) {
             console.error("Error fetching admin activities:", err);
-            setDashboardError(`Failed to fetch admin activities: ${err.message}`);
+            setDashboardDataError(`Failed to fetch admin activities: ${err.message}`);
         }
     };
 
     useEffect(() => {
-        // This effect runs when user or userProfile from AuthContext changes
-        if (!loading) { // Only proceed if AuthContext has finished loading
+        // This effect runs when auth state (user, userProfile, authLoading, authError) from AuthContext changes
+        if (!authLoading) { // Only proceed if AuthContext has finished loading its initial state
             if (authError) {
-                // If there's an authentication error, redirect to login
+                // If there's an authentication error from AuthContext, redirect to login
                 console.error("AuthContext Error:", authError);
                 router.push('/login');
             } else if (!user) {
-                // If no user is logged in, redirect to login
+                // If no user is logged in (after authLoading is false), redirect to login
                 router.push('/login');
             } else if (userProfile && userProfile.role !== 'admin') {
-                // If user is logged in but not an "admin", redirect based on their role
+                // If user is logged in but not an "admin", redirect based on their actual role
                 console.warn("Access Denied: User is not an admin. Role:", userProfile.role);
                 if (userProfile.role === 'expert') {
                     router.push('/expert/dashboard');
@@ -109,22 +122,28 @@ export default function AdminDashboardPage() {
                     router.push('/user/dashboard'); // Default for regular users
                 }
             } else if (userProfile && userProfile.role === 'admin') {
-                // User is an admin, fetch dashboard specific data
-                fetchOtherAdmins(user.uid);
-                fetchAdminActivities();
-                setDashboardError(null); // Clear any previous specific dashboard errors
+                // User is an admin, now fetch dashboard-specific data
+                setDashboardDataLoading(true); // Start loading dashboard specific data
+                setDashboardDataError(null); // Clear previous dashboard data errors
+                Promise.all([
+                    fetchOtherAdmins(user.uid), // Pass current admin UID to exclude self
+                    fetchAdminActivities()
+                ]).finally(() => {
+                    setDashboardDataLoading(false); // Finish loading dashboard specific data
+                });
             }
         }
-    }, [user, userProfile, loading, authError, router]); // Dependencies for this effect
+    }, [user, userProfile, authLoading, authError, router]); // Dependencies for this effect
 
-    // Combined error state for display
-    const displayError = authError || dashboardError;
+    // Determine overall loading and error states for rendering
+    const overallLoading = authLoading || dashboardDataLoading;
+    const displayError = authError || dashboardDataError;
 
-    if (loading) {
+    if (overallLoading) {
         return (
             <div className="container flex items-center justify-center min-h-[calc(100vh-4rem)] py-8 px-4">
                 <Loader2 className="mr-2 h-8 w-8 animate-spin" />
-                <p className="text-lg">Verifying admin access...</p>
+                <p className="text-lg">Verifying admin access and loading dashboard data...</p>
             </div>
         );
     }
@@ -142,7 +161,7 @@ export default function AdminDashboardPage() {
         );
     }
 
-    // If not admin and not loading/error (means redirected by useEffect), don't render anything
+    // If not admin (and not in loading/error state), it means they were redirected by useEffect, so return null
     if (!userProfile || userProfile.role !== 'admin') {
         return null;
     }
@@ -208,21 +227,25 @@ export default function AdminDashboardPage() {
             {/* Section: Admin Activity Log */}
             <div className="w-full max-w-4xl mb-12">
                 <h2 className="text-2xl font-bold mb-4">Admin Activity Log</h2>
-                {adminActivities.length === 0 && !dashboardError ? (
+                {adminActivities.length === 0 && !dashboardDataError ? (
                     <p className="text-muted-foreground">No recent admin activities to display.</p>
                 ) : (
                     <div className="space-y-4">
-                        {dashboardError && <p className="text-red-500 text-sm">{dashboardError}</p>}
+                        {dashboardDataError && <p className="text-red-500 text-sm">{dashboardDataError}</p>}
                         {adminActivities.map((activity) => (
                             <Card key={activity.id}>
                                 <CardContent className="p-4">
                                     <p className="text-sm font-medium">
                                         <span className="font-semibold">{activity.adminEmail}</span> ({activity.adminUid.substring(0, 8)}...)
-                                        {activity.action === 'approve_expert' && ` approved expert ${activity.targetFirstName} ${activity.targetLastName} (${activity.targetEmail})`}
+                                        {activity.action === 'approved_expert' && ` approved expert ${activity.targetFirstName} ${activity.targetLastName} (${activity.targetEmail})`}
                                         {activity.action === 'rejected_expert' && ` rejected expert ${activity.targetFirstName} ${activity.targetLastName} (${activity.targetEmail})`}
-                                        {activity.action === 'approve_mentor' && ` approved mentor ${activity.targetFirstName} ${activity.targetLastName} (${activity.targetEmail})`}
+                                        {activity.action === 'approved_mentor' && ` approved mentor ${activity.targetFirstName} ${activity.targetLastName} (${activity.targetEmail})`}
                                         {activity.action === 'rejected_mentor' && ` rejected mentor ${activity.targetFirstName} ${activity.targetLastName} (${activity.targetEmail})`}
-                                        {activity.action === 'assign_admin_role' && ` assigned admin role to ${activity.targetFirstName} ${activity.targetLastName} (${activity.targetEmail})`}
+                                        {activity.action === 'approved_admin' && ` approved new admin ${activity.targetFirstName} ${activity.targetLastName} (${activity.targetEmail})`}
+                                        {activity.action === 'rejected_admin' && ` rejected admin request for ${activity.targetFirstName} ${activity.targetLastName} (${activity.targetEmail})`}
+                                        {activity.action === 'assigned_admin_role' && ` assigned admin role to ${activity.targetFirstName} ${activity.targetLastName} (${activity.targetEmail})`}
+                                        {activity.action === 'removed_admin_role' && ` removed admin role from ${activity.targetFirstName} ${activity.targetLastName} (${activity.targetEmail})`}
+                                        {/* Add more activity types here as you implement them */}
                                     </p>
                                     <p className="text-xs text-muted-foreground mt-1">
                                         {new Date(activity.timestamp).toLocaleString()}

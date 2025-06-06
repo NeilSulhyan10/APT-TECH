@@ -12,9 +12,11 @@ interface UserProfile {
     email: string;
     firstName: string;
     lastName: string;
-    role: string; // 'user', 'expert', 'admin'
-    status?: 'pending' | 'approved' | 'rejected';
-    createdAt?: string;
+    role: 'user' | 'expert' | 'admin'; // Explicitly define roles
+    status: 'pending' | 'approved' | 'rejected'; // New status field for experts/admins
+    college?: string;
+    year_of_study?: string;
+    createdAt: string; // ISO string
     // Add any other profile fields you store
 }
 
@@ -27,6 +29,7 @@ interface AuthContextType {
     logout: () => Promise<void>; // Function to log out
 }
 
+// Create the context
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 interface AuthProviderProps {
@@ -47,7 +50,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
             setError(null); // Clear previous errors
 
             if (firebaseUser) {
-                // User is signed in
+                // User is signed in via Firebase Auth
                 setUser(firebaseUser);
                 try {
                     // Fetch user's profile from Firestore
@@ -58,14 +61,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
                         const profileData = userDocSnap.data() as UserProfile;
                         setUserProfile(profileData);
                         // Also update localStorage for quick access/initial navbar rendering
+                        // Ensure it's the full profile, including role and status
                         localStorage.setItem('userInfo', JSON.stringify(profileData));
                     } else {
-                        // User exists in Auth but not in Firestore (should ideally not happen post-registration)
+                        // Scenario: User exists in Firebase Auth but no profile in Firestore.
+                        // This indicates a potential issue during signup or a malformed user.
                         console.warn("User profile not found in Firestore for UID:", firebaseUser.uid);
-                        setError("User profile data incomplete. Please contact support.");
+                        setError("User profile data incomplete. Please contact support or try re-registering.");
                         setUserProfile(null);
-                        // Optionally force logout or redirect to profile completion
-                        // signOut(auth);
+                        // Optionally, you might want to automatically sign them out or redirect
+                        // to a profile completion page in a production app.
+                        // For now, they'll be treated as unauthenticated for feature access.
+                        await signOut(auth); // Force sign out if profile is missing
                     }
                 } catch (err: any) {
                     console.error("Error fetching user profile:", err);
@@ -73,11 +80,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
                     setUserProfile(null);
                 }
             } else {
-                // User is signed out
+                // User is signed out (or initial state)
                 setUser(null);
                 setUserProfile(null);
                 localStorage.removeItem('userInfo'); // Clear local storage on sign out
-                localStorage.removeItem('authToken');
+                localStorage.removeItem('authToken'); // Clear auth token from local storage
             }
             setLoading(false); // End loading once auth state and profile are processed
         });
@@ -91,7 +98,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setError(null);
         try {
             await signOut(auth);
-            // onAuthStateChanged listener will handle clearing state and localStorage
+            // The onAuthStateChanged listener above will handle clearing state and localStorage
             router.push('/login'); // Redirect to login page
         } catch (err: any) {
             console.error("Error during logout:", err);
@@ -101,6 +108,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         }
     };
 
+    // The value provided by the context to consuming components
     const value = {
         user,
         userProfile,

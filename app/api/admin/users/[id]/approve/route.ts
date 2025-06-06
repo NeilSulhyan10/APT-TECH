@@ -1,6 +1,6 @@
 // app/api/admin/users/[id]/approve/route.ts
-// This file handles PATCH requests to approve or reject expert/mentor users,
-// and now also logs these actions to a Firestore collection.
+// This file handles PATCH requests to approve or reject various user roles (expert, mentor, admin).
+// It also logs these actions to a Firestore collection.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/config/firebase'; // Your Firestore DB instance
@@ -8,11 +8,11 @@ import { doc, updateDoc, getDoc, collection, addDoc } from 'firebase/firestore';
 import admin from '@/app/firebase/admin'; // Firebase Admin SDK for token verification and custom claims
 
 /**
- * Handles PATCH requests to approve or reject a user (specifically experts/mentors).
+ * Handles PATCH requests to approve or reject a user's pending role request.
  * Only administrators can call this endpoint.
  */
 export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
-  const { id } = params; // The UID of the user to be approved/rejected
+  const { id } = params; // The UID of the user whose role request is being acted upon
   console.log(`Backend: PATCH /api/admin/users/${id}/approve route hit!`);
 
   try {
@@ -56,40 +56,33 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     }
 
     const userData = userDocSnap.data();
-    const currentRole = userData?.role;
+    const currentRequestedRole = userData?.role; // The role they requested (e.g., 'expert', 'admin')
     const currentStatus = userData?.status;
-    const targetUserEmail = userData?.email || 'N/A'; // Email of the user being acted upon
+    const targetUserEmail = userData?.email || 'N/A';
     const targetUserFirstName = userData?.firstName || '';
     const targetUserLastName = userData?.lastName || '';
 
 
-    // Only allow approval/rejection for expert/mentor roles that are pending
-    if (!(currentRole === 'expert' || currentRole === 'mentor') || currentStatus !== 'pending') {
-        return NextResponse.json({ error: `Cannot ${action} user. User is not a pending expert/mentor.` }, { status: 400 });
+    // Only allow approval/rejection for roles that are currently 'pending'
+    if (currentStatus !== 'pending') {
+        return NextResponse.json({ error: `Cannot ${action} user. User is not in a pending state.` }, { status: 400 });
     }
 
     let message = '';
     let updatedStatus = '';
-    let updatedRole = currentRole; // Role in Firestore remains 'expert' or 'mentor'
+    let firebaseAuthRoleClaim = 'user'; // Default role claim if rejected or default user
     let activityActionType = '';
 
     if (action === 'approve') {
       updatedStatus = 'approved';
-      message = `${currentRole} user ${id} approved successfully.`;
-      activityActionType = `approved_${currentRole}`;
-      // Set Firebase Custom Claim for the approved expert/mentor
-      await admin.auth().setCustomUserClaims(id, { role: updatedRole });
-      // Revoke existing tokens to force the user to re-authenticate and get the new token with claims
-      await admin.auth().revokeRefreshTokens(id);
-      console.log(`Firebase Custom Claim 'role:${updatedRole}' set for ${id}. Refresh tokens revoked.`);
+      firebaseAuthRoleClaim = currentRequestedRole; // Set Firebase Auth claim to the requested role
+      message = `${currentRequestedRole} user ${id} approved successfully.`;
+      activityActionType = `approved_${currentRequestedRole}`;
     } else { // action === 'reject'
       updatedStatus = 'rejected';
-      message = `${currentRole} user ${id} rejected.`;
-      activityActionType = `rejected_${currentRole}`;
-      // When rejecting, revert their Firebase Auth claim to 'user'
-      await admin.auth().setCustomUserClaims(id, { role: 'user' });
-      await admin.auth().revokeRefreshTokens(id);
-      console.log(`Firebase Custom Claim reverted to 'role:user' for ${id}. Refresh tokens revoked.`);
+      firebaseAuthRoleClaim = 'user'; // If rejected, set Firebase Auth claim back to 'user'
+      message = `${currentRequestedRole} user ${id} rejected. Their role is reverted to 'user'.`;
+      activityActionType = `rejected_${currentRequestedRole}`;
     }
 
     // Update the user's document in Firestore
@@ -98,22 +91,26 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       updatedAt: new Date().toISOString(),
     });
 
-    // --- NEW: Log the admin activity to Firestore ---
+    // Update Firebase Custom Claim for the user and revoke refresh tokens
+    await admin.auth().setCustomUserClaims(id, { role: firebaseAuthRoleClaim });
+    await admin.auth().revokeRefreshTokens(id); // Force re-authentication to get new token with claims
+    console.log(`Firebase Custom Claim 'role:${firebaseAuthRoleClaim}' set for ${id}. Refresh tokens revoked.`);
+
+
+    // --- Log the admin activity to Firestore ---
     await addDoc(collection(db, 'admin_logs'), {
       adminUid: adminUid,
       adminEmail: adminEmail,
       action: activityActionType,
       targetUid: id,
       targetEmail: targetUserEmail,
-      targetRole: currentRole, // The role they were attempting to get
+      targetRole: currentRequestedRole, // The role they were attempting to get (e.g., 'expert', 'admin')
       targetFirstName: targetUserFirstName,
       targetLastName: targetUserLastName,
       timestamp: new Date().toISOString(),
     });
     console.log(`Admin activity logged: ${activityActionType} for ${id}`);
-    // --- END NEW ---
 
-    console.log(message);
     return NextResponse.json({ message, uid: id, newStatus: updatedStatus }, { status: 200 });
 
   } catch (error) {
