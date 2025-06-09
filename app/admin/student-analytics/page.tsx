@@ -67,7 +67,7 @@ export default function StudentAnalyticsPage() {
       return;
     }
 
-    // If authorized, fetch student data
+    // If authorized, fetch student data)
     if (userData?.role === "admin") {
       fetchAllStudentData();
     }
@@ -90,11 +90,12 @@ export default function StudentAnalyticsPage() {
         fetchedStudents.push({
           uid: docSnap.id,
           college: data.college || undefined,
-          year: data.year || undefined,
+          year: data.year_of_study || undefined,
           purchasedPackages: data.purchasedPackages || [], // Ensure it's an array
         });
       });
       setAllStudents(fetchedStudents);
+      console.log("Fetched all student data for analytics:", fetchedStudents);
     } catch (err: any) {
       console.error("Error fetching all student data for analytics:", err);
       setError("Failed to load student data. Please try again.");
