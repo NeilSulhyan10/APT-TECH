@@ -24,29 +24,29 @@ export async function POST(request: NextRequest) {
     const parsedBody = JSON.parse(rawBody);
 
     // Destructure the expected user profile data from the parsed body
-    const { uid, email, firstName, lastName, college, year_of_study, ...otherProfileData } = parsedBody;
-
-    // Debugging: Log the destructured variables to confirm values
-    // console.log("Backend: Destructured Data for POST:");
-    // console.log("  UID:", uid);
-    // console.log("  Email:", email);
-    // console.log("  First Name:", firstName);
-    // console.log("  Last Name:", lastName);
-    // console.log("  College:", college);
-    // console.log("  Year of Study:", year_of_study);
-    // console.log("  Other Data:", otherProfileData);
+    const {
+      uid,
+      email,
+      firstName,
+      lastName,
+      college,
+      year_of_study,
+      role,
+      isMentorApproved,
+      mentorship,
+      createdAt
+    } = parsedBody;
 
     // Basic Server-Side Validation: Ensure essential profile data is present
-    if (!uid || !email || !firstName || !lastName) {
+    if (!uid || !email || !firstName || !lastName || !role) {
       console.error("Backend Validation Failed: Missing required fields for user profile creation.");
       return NextResponse.json(
-        { error: 'Missing required user profile data (uid, email, firstName, or lastName).' },
+        { error: 'Missing required user profile data (uid, email, firstName, lastName, or role).' },
         { status: 400 }
       );
     }
 
     // Firebase ID Token Verification for Security:
-    // This ensures the request comes from an authenticated user and prevents unauthorized profile creation.
     const authorizationHeader = request.headers.get('Authorization');
     if (!authorizationHeader || !authorizationHeader.startsWith('Bearer ')) {
       console.error("Backend Auth Failed: No Bearer token provided in Authorization header.");
@@ -76,30 +76,42 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Save User Profile Data to Firestore:
-    // The user's Firebase Auth UID is used as the document ID for their profile in the 'users' collection.
-    const userProfileRef = doc(db, 'users', uid);
-    await setDoc(userProfileRef, {
-      uid, // Store UID explicitly within the document
+    // Prepare the user profile data for Firestore
+    const userProfileToSave: { [key: string]: any } = {
+      uid,
       email,
       firstName,
       lastName,
-      college,
-      year_of_study,
-      createdAt: new Date().toISOString(), // Timestamp for when the profile was created
-      ...otherProfileData // Include any other data passed from the frontend
-    }, { merge: true }); // Use merge: true to avoid overwriting if a document for this UID already exists
+      college: college || null,
+      year_of_study: year_of_study || null,
+      role,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
 
-    // Respond with success
-    console.log(`User profile for UID: ${uid} created/updated successfully in Firestore.`);
+    if (role === 'mentor') {
+        userProfileToSave.isMentorApproved = typeof isMentorApproved === 'boolean' ? isMentorApproved : false;
+    } else if (role === 'student') {
+        userProfileToSave.mentorship = typeof mentorship === 'string' ? mentorship : 'no';
+    }
+
+    // Save User Profile Data to Firestore
+    const userProfileRef = doc(db, 'users', uid);
+    await setDoc(userProfileRef, userProfileToSave, { merge: true });
+
+    // Respond with success, including the full userProfileToSave object
+    console.log(`User profile for UID: ${uid} with role: ${role} created/updated successfully in Firestore.`);
     return NextResponse.json(
-      { message: 'User profile created/updated successfully in Firestore.', uid },
+      {
+        message: 'User profile created/updated successfully in Firestore.',
+        uid: uid,
+        user: userProfileToSave // IMPORTANT: Include the full user profile object here
+      },
       { status: 201 }
     );
 
   } catch (error) {
     console.error('Error in POST /api/users:', error);
-    // Provide a generic error message to the client for security
     return NextResponse.json(
       { error: (error as Error).message || 'An unexpected error occurred on the server.' },
       { status: 500 }
@@ -111,7 +123,7 @@ export async function POST(request: NextRequest) {
  * Handles GET requests to /api/users
  * Used for fetching all user profiles from Firestore.
  */
-export async function GET() {
+export async function GET(request: NextRequest) { // Added NextRequest type for consistency
   console.log("Backend: GET /api/users route hit!"); // Debugging log
   try {
     const snapshot = await getDocs(usersCollectionRef);

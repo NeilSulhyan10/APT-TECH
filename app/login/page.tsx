@@ -1,6 +1,7 @@
+// app/login/page.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,9 +14,10 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Checkbox } from "@/components/ui/checkbox"; // Keeping rememberMe checkbox
 import Link from "next/link";
-import { signOut } from "firebase/auth";
+import { Loader2 } from "lucide-react"; // For loading spinner
+import { signOut } from "firebase/auth"; // For potential cleanup on error
 // Import necessary Firebase Auth functions and your auth instance/provider
 import { auth, provider } from "@/config/firebase";
 import {
@@ -26,148 +28,137 @@ import {
   browserLocalPersistence,
 } from "firebase/auth";
 
+// Import your AuthContext hook
+import { useAuth } from '@/app/context/authContext'; // Adjust path if different
+
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
+  const [loading, setLoading] = useState(false); // For email/password login button
+  const [googleLoading, setGoogleLoading] = useState(false); // For Google login button
 
   const router = useRouter();
 
-  // Helper function to handle common login logic after Firebase Auth succeeds
-  const handleSuccessfulLogin = async (user: any) => {
-    try {
-      const token = await user.getIdToken();
-      console.log("Firebase ID Token obtained:", token);
+  // Get authentication state from AuthContext
+  const { userData, loading: authContextLoading, isAuthenticated } = useAuth();
 
-      // Send the token to your backend for verification (in the Authorization header)
-      const response = await fetch("/api/users/login", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(
-          errorData.message || "Login failed on backend verification."
-        );
-      }
-
-      const data = await response.json();
-      console.log("Backend verification successful:", data);
-
-      // --- START CHANGE ---
-      // Backend returns 'name', but Navbar expects 'firstName' for display.
-      // Parse 'name' into 'firstName' and 'lastName' here for consistent local storage.
-      const userDisplayName = data.user.name || "";
-      const nameParts = userDisplayName.split(" ");
-      const firstName = nameParts[0] || "";
-      const lastName = nameParts.slice(1).join(" ") || "";
-
-      const userInfoToStore = {
-        uid: data.user.uid,
-        email: data.user.email,
-        firstName: firstName, // Store parsed first name
-        lastName: lastName, // Store parsed last name
-        // Include any other user data from 'data.user' if available from backend
-        // e.g., college, year_of_study if your backend passes it back after login
-      };
-      // --- END CHANGE ---
-
-      // Store the token and user info
-      localStorage.setItem("authToken", token);
-      localStorage.setItem("userInfo", JSON.stringify(userInfoToStore));
-
-      // Redirect
-      router.push("/"); // Redirect to home or dashboard
-    } catch (err: any) {
-      console.error("Post-auth process error:", err);
-      signOut(auth); // Sign out if there's an error after Firebase Auth success
-      localStorage.removeItem("authToken");
-      localStorage.removeItem("userInfo");
-      setError(
-        err.message ||
-          "An error occurred after authentication. Please try again."
-      );
+  // --- Redirection Logic ---
+  useEffect(() => {
+    // Only proceed if AuthContext has finished its initial loading check
+    if (authContextLoading) {
+      return;
     }
-  };
 
-  // Email/Password Login Handler
+    // If already authenticated and userData is available, redirect based on role
+    if (isAuthenticated && userData) {
+      let redirectPath = '/'; // Default for general authenticated users
+
+      if (userData.role === 'admin') {
+        redirectPath = '/admin/dashboard';
+      } else if (userData.role === 'expert') {
+        redirectPath = '/experts/dashboard';
+      } else if (userData.role === 'student') {
+        redirectPath = '/'; // Students can go to their profile or a specific student dashboard
+      }
+      // You can add more specific redirections based on role and approval status if needed
+      // e.g., if (userData.role === 'expert' && userData.isExpertApproved === false) { redirectPath = '/expert-pending-approval'; }
+
+      router.push(redirectPath);
+      console.log(`User ${userData.email} (${userData.role}) redirected to ${redirectPath}`);
+    }
+    // If not authenticated, do nothing, stay on login page to allow login.
+  }, [isAuthenticated, userData, authContextLoading, router]); // Dependencies: reruns when these change
+
+  // --- Email/Password Login Handler ---
   const handleEmailPasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setError(null);
+    setError(null); // Clear previous errors
 
     try {
+      // Set Firebase persistence based on "Remember me" checkbox
       await setPersistence(
         auth,
         rememberMe ? browserLocalPersistence : browserSessionPersistence
       );
-      const userCredential = await signInWithEmailAndPassword(
-        auth,
-        email,
-        password
-      );
-      await handleSuccessfulLogin(userCredential.user);
+
+      await signInWithEmailAndPassword(auth, email, password);
+
+      // Successfully signed in via Firebase Auth.
+      // The `onAuthStateChanged` listener in AuthContext will now trigger,
+      // fetch the full user profile, update `userData`, and then the useEffect above
+      // will handle the role-based redirection.
+      console.log("Firebase email/password sign-in successful. AuthContext will handle redirection.");
+
     } catch (err: any) {
-      console.error("Login error:", err);
-      if (err.code === "auth/invalid-email") {
-        setError("The email address is not valid.");
-      } else if (err.code === "auth/user-disabled") {
-        setError("This user account has been disabled.");
-      } else if (
-        err.code === "auth/user-not-found" ||
-        err.code === "auth/wrong-password" ||
-        err.code === "auth/invalid-credential"
-      ) {
-        setError("Invalid email or password. Please check your credentials.");
-      } else if (err.code === "auth/network-request-failed") {
-        setError("Network error. Please check your internet connection.");
+      console.error("Email/Password Login error:", err);
+      // Provide user-friendly error messages based on Firebase Auth error codes
+      if (err.code === 'auth/invalid-email' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        setError('Invalid email or password.');
+      } else if (err.code === 'auth/user-disabled') {
+        setError('This account has been disabled.');
+      } else if (err.code === 'auth/too-many-requests') {
+        setError('Too many login attempts. Please try again later.');
+      } else if (err.code === 'auth/network-request-failed') {
+        setError('Network error. Please check your internet connection.');
       } else {
-        setError(err.message || "An unexpected error occurred during login.");
+        setError(`Login failed: ${err.message || 'An unexpected error occurred.'}`);
       }
     } finally {
-      setLoading(false);
+      setLoading(false); // Stop loading regardless of success or failure
     }
   };
 
-  // Google Login Handler
+  // --- Google Login Handler ---
   const handleGoogleLogin = async () => {
     setGoogleLoading(true);
-    setError(null);
+    setError(null); // Clear previous errors
 
     try {
+      // Set Firebase persistence based on "Remember me" checkbox
       await setPersistence(
         auth,
         rememberMe ? browserLocalPersistence : browserSessionPersistence
       );
-      const result = await signInWithPopup(auth, provider);
-      await handleSuccessfulLogin(result.user);
+
+      await signInWithPopup(auth, provider);
+
+      // Successfully signed in via Google popup.
+      // Similar to email/password, AuthContext will handle the subsequent
+      // profile fetching and role-based redirection.
+      console.log("Google sign-in successful. AuthContext will handle redirection.");
+
     } catch (err: any) {
-      console.error("Google login error:", err);
+      console.error("Google Login error:", err);
       if (err.code === "auth/popup-closed-by-user") {
         setError("Google sign-in cancelled.");
       } else if (err.code === "auth/cancelled-popup-request") {
         setError("Google sign-in cancelled or blocked by browser.");
       } else if (err.code === "auth/account-exists-with-different-credential") {
-        setError(
-          "An account with this email already exists using a different sign-in method. Please login with that method."
-        );
+        setError("An account with this email already exists using a different sign-in method. Please login with that method.");
       } else {
-        setError(
-          err.message || "An unexpected error occurred during Google login."
-        );
+        setError(`Google login failed: ${err.message || 'An unexpected error occurred.'}`);
       }
     } finally {
-      setGoogleLoading(false);
+      setGoogleLoading(false); // Stop loading regardless of success or failure
     }
   };
 
+  // --- Conditional Rendering for Loading/Redirecting ---
+  // If AuthContext is still loading OR if user is authenticated and userData is available
+  // (meaning redirection is in progress or about to happen), show a "Redirecting..." message.
+  if (authContextLoading || (isAuthenticated && userData)) {
+    return (
+      <div className="container flex items-center justify-center min-h-[calc(100vh-4rem)] py-8 px-4">
+        <Loader2 className="mr-2 h-8 w-8 animate-spin" />
+        <p className="text-lg">Redirecting to your dashboard...</p>
+      </div>
+    );
+  }
+
+  // --- Login Form UI ---
   return (
     <div className="container flex items-center justify-center min-h-[calc(100vh-4rem)] py-8 px-4">
       <Card className="w-full max-w-md">

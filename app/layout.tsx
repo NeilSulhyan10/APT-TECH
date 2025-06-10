@@ -10,6 +10,7 @@ import PWAInstaller from "@/components/pwa-installer";
 import OfflineBanner from "@/components/offline-banner";
 import RegisterServiceWorker from "./register-sw";
 import { Toaster } from "@/components/ui/toaster";
+import { AuthProvider } from "./context/authContext";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -37,23 +38,25 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="light"
-          enableSystem
-          disableTransitionOnChange
-        >
-          <div className="flex flex-col min-h-screen">
-            <Navbar />
-            <main className="flex-1">{children}</main>
-            <Footer />
-            <Chatbot />
-            <PWAInstaller />
-            <OfflineBanner />
-            <RegisterServiceWorker />
-            <Toaster />
-          </div>
-        </ThemeProvider>
+        <AuthProvider>
+          <ThemeProvider
+            attribute="class"
+            defaultTheme="light"
+            enableSystem
+            disableTransitionOnChange
+          >
+            <div className="flex flex-col min-h-screen">
+              <Navbar />
+              <main className="flex-1">{children}</main>
+              <Footer />
+              <Chatbot />
+              <PWAInstaller />
+              <OfflineBanner />
+              <RegisterServiceWorker />
+              <Toaster />
+            </div>
+          </ThemeProvider>
+        </AuthProvider>
       </body>
     </html>
   );

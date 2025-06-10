@@ -1,8 +1,9 @@
+// app/profile/page.tsx
 "use client";
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { doc, getDoc, updateDoc } from "firebase/firestore"; // Added updateDoc
+import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { db, auth } from "@/config/firebase";
 import { signOut } from "firebase/auth";
 
@@ -10,7 +11,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, LogOut, Save, X, Pencil } from "lucide-react"; // Added Pencil, Save, X icons
+import { Loader2, LogOut, Save, X, Pencil } from "lucide-react";
+
+// Import the useAuth hook
+import { useAuth } from '@/app/context/authContext'; 
 
 // Define a type for your user profile data for better type safety
 interface UserProfile {
@@ -18,49 +22,59 @@ interface UserProfile {
   email: string;
   firstName: string;
   lastName: string;
-  college: string;
-  year_of_study: string;
   createdAt: string;
-  // Add any other fields you store in Firestore that you want to display/edit
+  updatedAt?: string;
+  role: 'student' | 'expert' | 'admin'; // Added 'admin' role for completeness
+  // Student-specific fields (optional for expert/admin)
+  college?: string | null;
+  year_of_study?: string | null;
+  mentorship?: string | null; // e.g., 'seeking', 'no'
+  // Expert-specific fields (optional for student/admin)
+  expertise?: string | null;
+  bio?: string | null;
+  isExpertApproved?: boolean | null;
 }
 
 export default function ProfilePage() {
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Use the useAuth hook to get user data and loading state from AuthContext
+  const { userData, loading: authLoading, refreshUserData } = useAuth();
   const router = useRouter();
 
-  const [isEditing, setIsEditing] = useState(false); // New state to toggle edit mode
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true); // Local loading for Firestore fetch
+  const [error, setError] = useState<string | null>(null);
+
+  const [isEditing, setIsEditing] = useState(false); // State to toggle edit mode
   // States for editable fields
   const [editFirstName, setEditFirstName] = useState("");
   const [editLastName, setEditLastName] = useState("");
   const [editCollege, setEditCollege] = useState("");
   const [editYearOfStudy, setEditYearOfStudy] = useState("");
+  const [editExpertise, setEditExpertise] = useState("");
+  const [editBio, setEditBio] = useState("");
 
 
   useEffect(() => {
-    const fetchUserProfile = async () => {
-      setLoading(true);
+    const fetchUserProfileData = async () => {
+      // If AuthContext is still loading, wait for it
+      if (authLoading) {
+        setLoading(true); // Keep local loading true while auth is loading
+        return;
+      }
+
+      // If userData is null after authLoading is complete, it means no user is logged in
+      if (!userData) {
+        setError("User not logged in or session expired. Please login again.");
+        router.push('/login');
+        setLoading(false); // Auth is done loading, and no user found
+        return;
+      }
+
+      setLoading(true); // Start local loading for the Firestore fetch
       setError(null);
 
       try {
-        const storedUserInfo = localStorage.getItem('userInfo');
-        if (!storedUserInfo) {
-          setError("User not logged in or session expired. Please login again.");
-          router.push('/login');
-          return;
-        }
-
-        const userInfo = JSON.parse(storedUserInfo);
-        const userUid = userInfo.uid;
-
-        if (!userUid) {
-          setError("User ID not found in session. Please login again.");
-          router.push('/login');
-          return;
-        }
-
-        const docRef = doc(db, 'users', userUid);
+        const docRef = doc(db, 'users', userData.uid); // Use uid from AuthContext
         const docSnap = await getDoc(docRef);
 
         if (docSnap.exists()) {
@@ -71,29 +85,35 @@ export default function ProfilePage() {
           setEditLastName(profileData.lastName || "");
           setEditCollege(profileData.college || "");
           setEditYearOfStudy(profileData.year_of_study || "");
+          setEditExpertise(profileData.expertise || "");
+          setEditBio(profileData.bio || "");
           console.log("Profile data fetched from Firestore:", profileData);
         } else {
           setError("User profile not found in database. It might not have been created during signup.");
-          console.warn("No user profile found for UID:", userUid);
+          console.warn("No user profile found for UID:", userData.uid);
+          // Optionally, sign out if the user has no profile document
+          await signOut(auth);
+          router.push('/login');
         }
       } catch (err: any) {
         console.error("Error fetching user profile:", err);
         setError(`Failed to load profile: ${err.message || 'An unexpected error occurred.'}`);
       } finally {
-        setLoading(false);
+        setLoading(false); // Local fetch complete
       }
     };
 
-    fetchUserProfile();
-  }, [router]);
+    fetchUserProfileData();
+    // Re-run effect if userData or authLoading changes
+  }, [userData, authLoading, router]);
 
   // Handles user logout
   const handleLogout = async () => {
     try {
-      await signOut(auth);
-      localStorage.removeItem('authToken');
-      localStorage.removeItem('userInfo');
-      setUserProfile(null);
+      await signOut(auth); // Firebase signOut triggers AuthContext to update
+      localStorage.removeItem('authToken'); // Keep if your token is separate
+      // localStorage.removeItem('userInfo'); // No longer needed, AuthContext handles it
+      // setUserProfile(null); // AuthContext manages global state
       router.push('/login');
     } catch (error) {
       console.error("Error logging out from profile page:", error);
@@ -115,6 +135,8 @@ export default function ProfilePage() {
       setEditLastName(userProfile.lastName || "");
       setEditCollege(userProfile.college || "");
       setEditYearOfStudy(userProfile.year_of_study || "");
+      setEditExpertise(userProfile.expertise || "");
+      setEditBio(userProfile.bio || "");
     }
   };
 
@@ -124,23 +146,29 @@ export default function ProfilePage() {
     setError(null);
     try {
       const storedAuthToken = localStorage.getItem('authToken');
-      const storedUserInfo = localStorage.getItem('userInfo');
-      if (!storedAuthToken || !storedUserInfo) {
-        setError("Session expired. Please login again.");
+      // No longer need to fetch userInfo from localStorage here, use userData from context
+      if (!storedAuthToken || !userData) {
+        setError("Session expired or user not logged in. Please login again.");
         router.push('/login');
         return;
       }
 
-      const userInfo = JSON.parse(storedUserInfo);
-      const userUid = userInfo.uid;
+      const userUid = userData.uid; // Use uid from AuthContext
 
-      const updatedProfileData = {
+      // Prepare updated data based on role
+      const updatedProfileData: Partial<UserProfile> = {
         firstName: editFirstName,
         lastName: editLastName,
-        college: editCollege,
-        year_of_study: editYearOfStudy,
-        // Add other fields you want to update
+        updatedAt: new Date().toISOString(),
       };
+
+      if (userProfile?.role === 'student') {
+        updatedProfileData.college = editCollege;
+        updatedProfileData.year_of_study = editYearOfStudy;
+      } else if (userProfile?.role === 'expert') {
+        updatedProfileData.expertise = editExpertise;
+        updatedProfileData.bio = editBio;
+      }
 
       // Send PATCH request to backend API for update
       const res = await fetch(`/api/users/${userUid}`, {
@@ -152,16 +180,21 @@ export default function ProfilePage() {
         body: JSON.stringify(updatedProfileData),
       });
 
-      const data = await res.json();
+      const responseData = await res.json(); // Changed 'data' to 'responseData' to avoid conflict
 
       if (!res.ok) {
-        throw new Error(data.error || "Failed to update profile.");
+        throw new Error(responseData.error || "Failed to update profile.");
       }
 
       // Update local userProfile state with the new data
       setUserProfile((prevProfile) => ({ ...prevProfile!, ...updatedProfileData }));
       setIsEditing(false); // Exit edit mode
       console.log("Profile updated successfully!");
+
+      // Refresh global user data in AuthContext after successful update
+      if (refreshUserData) {
+        await refreshUserData();
+      }
 
     } catch (err: any) {
       console.error("Error saving profile changes:", err);
@@ -171,8 +204,8 @@ export default function ProfilePage() {
     }
   };
 
-
-  if (loading) {
+  // Combine authLoading and local loading for overall loading state
+  if (authLoading || loading) {
     return (
       <div className="container flex items-center justify-center min-h-[calc(100vh-4rem)] py-8 px-4">
         <Loader2 className="mr-2 h-8 w-8 animate-spin" />
@@ -181,6 +214,26 @@ export default function ProfilePage() {
     );
   }
 
+  // If AuthContext loaded and no user data, show login prompt
+  if (!userData) {
+    return (
+      <div className="container flex items-center justify-center min-h-[calc(100vh-4rem)] py-8 px-4">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle className="text-2xl font-bold text-center">Authentication Required</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-center text-muted-foreground">Please log in to view your profile.</p>
+            <Button onClick={() => router.push('/login')} className="w-full mt-4">
+              Go to Login
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // If there's a local error state, show it
   if (error) {
     return (
       <div className="container flex items-center justify-center min-h-[calc(100vh-4rem)] py-8 px-4">
@@ -199,6 +252,7 @@ export default function ProfilePage() {
     );
   }
 
+  // If userProfile is null after all loading and error checks (shouldn't happen if AuthContext works), show profile not found
   if (!userProfile) {
     return (
       <div className="container flex items-center justify-center min-h-[calc(100vh-4rem)] py-8 px-4">
@@ -216,6 +270,28 @@ export default function ProfilePage() {
       </div>
     );
   }
+
+
+  // Helper to format expert approval status
+  const getExpertApprovalStatus = (status: boolean | null | undefined) => {
+    if (status === true) {
+      return "Approved";
+    } else if (status === false) {
+      return "Pending/Rejected";
+    } else {
+      return "N/A";
+    }
+  };
+
+  // Helper to construct the role display (e.g., "Student" or "Expert (Approved)")
+  const getRoleDisplay = (profile: UserProfile) => {
+    let roleText = profile.role ? profile.role.charAt(0).toUpperCase() + profile.role.slice(1) : 'N/A';
+    // Only show approval status if role is 'expert' AND isExpertApproved is explicitly true or false
+    if (profile.role === 'expert' && typeof profile.isExpertApproved === 'boolean') {
+      roleText += ` (${getExpertApprovalStatus(profile.isExpertApproved)})`;
+    }
+    return roleText;
+  };
 
   return (
     <div className="container flex items-center justify-center min-h-[calc(100vh-4rem)] py-8 px-4">
@@ -246,27 +322,64 @@ export default function ProfilePage() {
                   />
                 </div>
               </div>
+
+              {/* Non-editable Email field - now plain text */}
               <div className="space-y-2">
-                <Label htmlFor="editCollege">College/University</Label>
-                <Input
-                  id="editCollege"
-                  value={editCollege}
-                  onChange={(e) => setEditCollege(e.target.value)}
-                />
+                <Label>Email</Label>
+                <p className="text-lg font-medium text-gray-800 dark:text-gray-200">
+                  {userProfile.email || 'N/A'}
+                </p>
               </div>
+
+              {/* Non-editable Role field - now plain text with status */}
               <div className="space-y-2">
-                <Label htmlFor="editYearOfStudy">Year of Study</Label>
-                <Input
-                  id="editYearOfStudy"
-                  value={editYearOfStudy}
-                  onChange={(e) => setEditYearOfStudy(e.target.value)}
-                />
+                <Label>Role</Label>
+                <p className="text-lg font-medium text-gray-800 dark:text-gray-200">
+                  {getRoleDisplay(userProfile)}
+                </p>
               </div>
-              {/* Email is typically not editable from client-side via profile */}
-              <div className="space-y-2">
-                <Label htmlFor="displayEmail">Email (Not Editable)</Label>
-                <Input id="displayEmail" type="email" value={userProfile.email} readOnly />
-              </div>
+
+              {userProfile.role === 'student' && (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="editCollege">College/University</Label>
+                    <Input
+                      id="editCollege"
+                      value={editCollege}
+                      onChange={(e) => setEditCollege(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="editYearOfStudy">Year of Study</Label>
+                    <Input
+                      id="editYearOfStudy"
+                      value={editYearOfStudy}
+                      onChange={(e) => setEditYearOfStudy(e.target.value)}
+                    />
+                  </div>
+                </>
+              )}
+
+              {userProfile.role === 'expert' && (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="editExpertise">Expertise</Label>
+                    <Input
+                      id="editExpertise"
+                      value={editExpertise}
+                      onChange={(e) => setEditExpertise(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="editBio">Bio</Label>
+                    <Input
+                      id="editBio"
+                      value={editBio}
+                      onChange={(e) => setEditBio(e.target.value)}
+                    />
+                  </div>
+                </>
+              )}
             </>
           ) : (
             // View Mode (Text Display)
@@ -292,17 +405,45 @@ export default function ProfilePage() {
                 </p>
               </div>
               <div className="space-y-2">
-                <Label>College/University</Label>
+                <Label>Role</Label>
                 <p className="text-lg font-medium text-gray-800 dark:text-gray-200">
-                  {userProfile.college || 'N/A'}
+                  {getRoleDisplay(userProfile)}
                 </p>
               </div>
-              <div className="space-y-2">
-                <Label>Year of Study</Label>
-                <p className="text-lg font-medium text-gray-800 dark:text-gray-200">
-                  {userProfile.year_of_study || 'N/A'}
-                </p>
-              </div>
+
+              {userProfile.role === 'student' && (
+                <>
+                  <div className="space-y-2">
+                    <Label>College/University</Label>
+                    <p className="text-lg font-medium text-gray-800 dark:text-gray-200">
+                      {userProfile.college || 'N/A'}
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Year of Study</Label>
+                    <p className="text-lg font-medium text-gray-800 dark:text-gray-200">
+                      {userProfile.year_of_study || 'N/A'}
+                    </p>
+                  </div>
+                </>
+              )}
+
+              {userProfile.role === 'expert' && (
+                <>
+                  <div className="space-y-2">
+                    <Label>Expertise</Label>
+                    <p className="text-lg font-medium text-gray-800 dark:text-gray-200">
+                      {userProfile.expertise || 'N/A'}
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Bio</Label>
+                    <p className="text-lg font-medium text-gray-800 dark:text-gray-200">
+                      {userProfile.bio || 'N/A'}
+                    </p>
+                  </div>
+                </>
+              )}
             </>
           )}
           {error && <p className="text-red-500 text-sm text-center mt-4">{error}</p>}

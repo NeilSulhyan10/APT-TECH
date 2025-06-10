@@ -21,96 +21,102 @@ import { Checkbox } from "@/components/ui/checkbox";
 import Link from "next/link";
 
 export default function RegisterPage() {
+  // --- New state for multi-step form ---
+  const [currentStep, setCurrentStep] = useState(1); // 1: Role selection, 2: Details/Google signup
+  // --- End new state ---
+
   // State for all form fields
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [college, setCollege] = useState("");
-  const [yearOfStudy, setYearOfStudy] = useState(""); // Controlled state for Select
-  const [agreeTerms, setAgreeTerms] = useState(false); // Renamed for clarity
+  const [yearOfStudy, setYearOfStudy] = useState("");
+  const [selectedRole, setSelectedRole] = useState("user"); // State for role, default to 'user' (student)
+  const [agreeTerms, setAgreeTerms] = useState(false);
 
   // UI states
-  const [loading, setLoading] = useState(false); // For email/password signup button
-  const [googleLoading, setGoogleLoading] = useState(false); // For Google signup button
-  const [error, setError] = useState<string | null>(null); // For displaying error messages to the user
+  const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const router = useRouter(); // Initialize useRouter hook for navigation
+  const router = useRouter();
+
+  // Helper function to parse Google Display Name into first/last name
+  const parseDisplayName = (displayName: string | null): { firstName: string, lastName: string } => {
+    if (!displayName) {
+      return { firstName: "N/A", lastName: "N/A" };
+    }
+    const parts = displayName.split(" ");
+    const firstName = parts[0] || "N/A";
+    const lastName = parts.slice(1).join(" ") || "N/A";
+    return { firstName, lastName };
+  };
 
   // Handles email/password registration
   const handleEmailPasswordRegister = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault(); // Prevent default form submission
+    e.preventDefault();
 
-    // Basic client-side validation
     if (!agreeTerms) {
       setError("Please agree to the terms and conditions.");
       return;
     }
-    if (!email || !password || !firstName || !lastName || !college || !yearOfStudy) {
+    if (!email || !password || !firstName || !lastName || !college || !yearOfStudy || !selectedRole) {
       setError("Please fill in all required fields.");
       return;
     }
 
-    setLoading(true); // Start loading state for the button
-    setError(null); // Clear any previous errors
+    setLoading(true);
+    setError(null);
 
     try {
-      // 1. Create user in Firebase Authentication
-      // This is the crucial step: Firebase handles the user account creation and password hashing.
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      const user = userCredential.user; // Get the user object from the successful credential
+      const user = userCredential.user;
 
       console.log("User successfully created in Firebase Auth. UID:", user.uid);
 
-      // 2. Get Firebase ID token for backend verification
-      // This token proves the user's identity to your backend.
       const token = await user.getIdToken();
 
-      // 3. Prepare additional user profile data for Firestore
-      // This data will be sent to your backend API to be saved in your Firestore database.
-      // The 'uid' links this profile data to the Firebase Auth user.
       const userProfileData = {
-        uid: user.uid, // The unique Firebase Auth User ID
-        email: user.email, // Email from Firebase Auth
+        uid: user.uid,
+        email: user.email,
         firstName: firstName,
         lastName: lastName,
         college: college,
         year_of_study: yearOfStudy,
-        createdAt: new Date().toISOString(), // Timestamp for when the profile was created
+        role: selectedRole, // Include the selected role
+        status: selectedRole === 'user' ? 'approved' : 'pending', // Set status based on role
+        createdAt: new Date().toISOString(),
       };
 
-      // 4. Send additional user profile data to your backend API
-      // This POST request goes to your /api/users endpoint to save the profile in Firestore.
+      console.log("Sending user profile data to backend:", userProfileData);
+
       const res = await fetch("/api/users", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}` // Send the ID token in the header for backend verification
+          "Authorization": `Bearer ${token}`
         },
-        body: JSON.stringify(userProfileData) // Send the profile data in the body
+        body: JSON.stringify(userProfileData)
       });
 
-      const data = await res.json(); // Parse the response from your backend
+      const data = await res.json();
 
-      // Check if the backend API call was successful
       if (!res.ok) {
-        // If backend returns an error (e.g., Firestore write failed)
         throw new Error(data.error || "Failed to save user profile to database.");
       }
 
       console.log("User profile saved to Firestore:", data.message);
 
-      // 5. Store the Firebase ID token and user info locally for immediate session
-      localStorage.setItem("authToken", token);
-      localStorage.setItem("userInfo", JSON.stringify(userProfileData)); // Store the full profile data
-
-      // 6. Redirect to a protected page after successful registration
-      router.push("/"); // Navigate to your dashboard or a welcome page
+      // We don't store authToken/userInfo in localStorage here anymore.
+      // AuthContext will handle it upon onAuthStateChanged.
+      // After registration, AuthContext will fetch the new user's profile and then redirect.
+      // For now, we'll redirect immediately to login, allowing AuthContext to handle the full flow.
+      router.push("/login?registered=true"); // Redirect to login after successful registration
 
     } catch (err: any) {
-      console.error("Registration error:", err); // Log the full error object for debugging
+      console.error("Registration error:", err);
 
-      // Provide user-friendly error messages based on Firebase Auth error codes
       if (err.code === 'auth/email-already-in-use') {
         setError('This email is already registered. Please try logging in.');
       } else if (err.code === 'auth/weak-password') {
@@ -118,46 +124,50 @@ export default function RegisterPage() {
       } else if (err.code === 'auth/invalid-email') {
         setError('The email address is not valid.');
       } else {
-        // Fallback for other unexpected errors
         setError(err.message || "An unexpected error occurred during registration.");
       }
     } finally {
-      setLoading(false); // End loading state
+      setLoading(false);
     }
   };
 
-  // Handles Google Sign-in (Minor adjustments for consistency)
+  // Handles Google Sign-in
   const handleGoogleSignIn = async () => {
-    setGoogleLoading(true); // Start Google loading state
-    setError(null); // Clear any previous errors
+    setGoogleLoading(true);
+    setError(null);
 
     try {
-      // 1. Authenticate with Google using Firebase signInWithPopup
       const result = await signInWithPopup(auth, provider);
-      const user = result.user; // User object from successful Google sign-in
+      const user = result.user;
 
       console.log("Signed in with Google. UID:", user.uid);
 
-      // 2. Get Firebase ID token for backend verification
       const token = await user.getIdToken();
+      const { firstName: googleFirstName, lastName: googleLastName } = parseDisplayName(user.displayName);
 
-      // 3. Prepare user profile data for Firestore (adjust defaults for Google users)
+      // Use the selectedRole from the form for Google sign-in (already present in state)
+      const roleForGoogleUser = selectedRole;
+      const statusForGoogleUser = roleForGoogleUser === 'user' ? 'approved' : 'pending';
+
       const userProfileData = {
         uid: user.uid,
-        email: user.email || "", // Email might be null/undefined for some providers
-        firstName: user.displayName?.split(" ")[0] || "",
-        lastName: "N/A",
+        email: user.email || "",
+        firstName: googleFirstName,
+        lastName: googleLastName,
         college: "N/A", // Google sign-in doesn't provide this, set default or ask later
         year_of_study: "N/A", // Google sign-in doesn't provide this, set default or ask later
+        role: roleForGoogleUser, // Assign the selected role for Google sign-in
+        status: statusForGoogleUser, // Assign status based on selected role
         createdAt: new Date().toISOString(),
       };
 
-      // 4. Send profile data to backend (same /api/users POST endpoint)
+      console.log("Sending Google user profile data to backend:", userProfileData);
+
       const res = await fetch("/api/users", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}` // Send token for backend verification
+          "Authorization": `Bearer ${token}`
         },
         body: JSON.stringify(userProfileData)
       });
@@ -169,17 +179,12 @@ export default function RegisterPage() {
 
       console.log("Google user profile saved to Firestore:", data.message);
 
-      // 5. Store token and user info locally
-      localStorage.setItem("authToken", token);
-      localStorage.setItem("userInfo", JSON.stringify(userProfileData));
-
-      // 6. Redirect after successful Google sign-in
-      router.push("/");
+      // Similar to email/password, let AuthContext handle subsequent state and redirection
+      router.push("/login?registered=true");
 
     } catch (err: any) {
-      console.error("Google sign-in error:", err); // Log the full error
+      console.error("Google sign-in error:", err);
 
-      // Provide user-friendly error messages
       if (err.code === 'auth/popup-closed-by-user') {
         setError('Google sign-in cancelled.');
       } else if (err.code === 'auth/cancelled-popup-request') {
@@ -190,140 +195,215 @@ export default function RegisterPage() {
         setError(err.message || "An unexpected error occurred during Google sign-in.");
       }
     } finally {
-      setGoogleLoading(false); // End Google loading state
+      setGoogleLoading(false);
     }
   };
 
   return (
     <div className="container flex items-center justify-center min-h-[calc(100vh-4rem)] py-8 px-4">
       <Card className="w-full max-w-md">
-        {/* Attach the email/password submission handler to the form */}
-        <form onSubmit={handleEmailPasswordRegister}>
-          <CardHeader className="space-y-1">
-            <CardTitle className="text-2xl font-bold text-center">Create an account</CardTitle>
-            <CardDescription className="text-center">
-              Enter your details to register for APT-TECH Connect
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+        {/* Step 1: Role Selection */}
+        {currentStep === 1 && (
+          <>
+            <CardHeader className="space-y-1">
+              <CardTitle className="text-2xl font-bold text-center">Select Your Role</CardTitle>
+              <CardDescription className="text-center">
+                Choose how you'd like to join APT-TECH Connect.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="firstName">First name</Label>
-                <Input
-                  name="firstName"
-                  id="firstName"
-                  placeholder="Enter your first name"
-                  value={firstName} // Controlled input
-                  onChange={(e) => setFirstName(e.target.value)} // Update state
+                <Label htmlFor="role">Register as</Label>
+                <Select
+                  name="role"
+                  value={selectedRole}
+                  onValueChange={(value) => setSelectedRole(value as 'user' | 'expert')} // Cast to ensure correct type
                   required
-                />
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select your role" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="user">Student/Candidate</SelectItem>
+                    <SelectItem value="expert">Expert/Trainer</SelectItem>
+                    {/* Admin role is NOT offered on public registration for security */}
+                  </SelectContent>
+                </Select>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="lastName">Last name</Label>
-                <Input
-                  name="lastName"
-                  id="lastName"
-                  placeholder="Enter your last name"
-                  value={lastName} // Controlled input
-                  onChange={(e) => setLastName(e.target.value)} // Update state
-                  required
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                name="email"
-                id="email"
-                type="email"
-                placeholder="Enter your email"
-                value={email} // Controlled input
-                onChange={(e) => setEmail(e.target.value)} // Update state
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                name="password"
-                id="password"
-                type="password"
-                value={password} // Controlled input
-                onChange={(e) => setPassword(e.target.value)} // Update state
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="college">College/University</Label>
-              <Input
-                name="college"
-                id="college"
-                placeholder="Enter your college"
-                value={college} // Controlled input
-                onChange={(e) => setCollege(e.target.value)} // Update state
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="year">Year of Study</Label>
-              <Select
-                name="year"
-                value={yearOfStudy} // Controlled component: value tied to state
-                onValueChange={(value) => setYearOfStudy(value)} // Update state on change
-                required // Mark as required
+              {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+            </CardContent>
+            <CardFooter className="flex flex-col space-y-4">
+              <Button
+                className="w-full"
+                onClick={() => {
+                  if (selectedRole) {
+                    setCurrentStep(2); // Proceed to step 2
+                    setError(null); // Clear any previous error
+                  } else {
+                    setError("Please select a role to proceed.");
+                  }
+                }}
               >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select year" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="1">First Year</SelectItem>
-                  <SelectItem value="2">Second Year</SelectItem>
-                  <SelectItem value="3">Third Year</SelectItem>
-                  <SelectItem value="4">Final Year</SelectItem>
-                  <SelectItem value="pg">Post Graduate</SelectItem>
-                </SelectContent>
-              </Select>
-              {/* Removed hidden input as Select is now fully controlled by state */}
-            </div>
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="terms"
-                checked={agreeTerms}
-                onCheckedChange={(checked) => setAgreeTerms(!!checked)} // Ensure boolean
-              />
-              <Label htmlFor="terms" className="text-sm">
-                I agree to the{" "}
-                <Link href="/terms" className="text-primary hover:underline">
-                  terms and conditions
+                Next
+              </Button>
+              <div className="text-center text-sm">
+                Already have an account?{" "}
+                <Link href="/login" className="text-primary hover:underline">
+                  Sign in
                 </Link>
-              </Label>
-            </div>
-            {error && <p className="text-red-500 text-sm text-center">{error}</p>}
-          </CardContent>
-          <CardFooter className="flex flex-col space-y-4">
-            <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Signing Up..." : "Sign Up"}
-            </Button>
+              </div>
+            </CardFooter>
+          </>
+        )}
 
-            {/* Google Sign In Button */}
-            <Button
-              type="button" // Important: set type="button" to prevent form submission
-              variant="outline"
-              className="w-full"
-              onClick={handleGoogleSignIn}
-              disabled={googleLoading}
-            >
-              {googleLoading ? "Signing in with Google..." : "Sign up with Google"}
-            </Button>
+        {/* Step 2: User Details / Google Sign-in */}
+        {currentStep === 2 && (
+          <form onSubmit={handleEmailPasswordRegister}>
+            <CardHeader className="space-y-1">
+              <CardTitle className="text-2xl font-bold text-center">Create Your Account</CardTitle>
+              <CardDescription className="text-center">
+                Fill in your details or sign up with Google.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="firstName">First name</Label>
+                  <Input
+                    name="firstName"
+                    id="firstName"
+                    placeholder="Enter your first name"
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="lastName">Last name</Label>
+                  <Input
+                    name="lastName"
+                    id="lastName"
+                    placeholder="Enter your last name"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  name="email"
+                  id="email"
+                  type="email"
+                  placeholder="Enter your email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="password">Password</Label>
+                <Input
+                  name="password"
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="college">College/University</Label>
+                <Input
+                  name="college"
+                  id="college"
+                  placeholder="Enter your college"
+                  value={college}
+                  onChange={(e) => setCollege(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="year">Year of Study</Label>
+                <Select
+                  name="year"
+                  value={yearOfStudy}
+                  onValueChange={(value) => setYearOfStudy(value)}
+                  required
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select year" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">First Year</SelectItem>
+                    <SelectItem value="2">Second Year</SelectItem>
+                    <SelectItem value="3">Third Year</SelectItem>
+                    <SelectItem value="4">Final Year</SelectItem>
+                    <SelectItem value="pg">Post Graduate</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {/* Role display (read-only) for context */}
+              <div className="space-y-2">
+                <Label htmlFor="selectedRoleDisplay">Selected Role</Label>
+                <Input
+                  id="selectedRoleDisplay"
+                  value={selectedRole === 'user' ? 'Student/Candidate' : 'Expert/Trainer'}
+                  readOnly
+                  className="bg-muted-foreground/10" // Make it look like a read-only field
+                />
+              </div>
 
-            <div className="text-center text-sm">
-              Already have an account?{" "}
-              <Link href="/login" className="text-primary hover:underline">
-                Sign in
-              </Link>
-            </div>
-          </CardFooter>
-        </form>
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="terms"
+                  checked={agreeTerms}
+                  onCheckedChange={(checked) => setAgreeTerms(!!checked)}
+                />
+                <Label htmlFor="terms" className="text-sm">
+                  I agree to the{" "}
+                  <Link href="/terms" className="text-primary hover:underline">
+                    terms and conditions
+                  </Link>
+                </Label>
+              </div>
+              {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+            </CardContent>
+            <CardFooter className="flex flex-col space-y-4">
+              <Button type="submit" className="w-full" disabled={loading}>
+                {loading ? "Signing Up..." : "Sign Up"}
+              </Button>
+
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={handleGoogleSignIn}
+                disabled={googleLoading}
+              >
+                {googleLoading ? "Signing in with Google..." : "Sign up with Google"}
+              </Button>
+
+              {/* Back button for multi-step */}
+              <Button
+                type="button"
+                variant="ghost"
+                className="w-full mt-2"
+                onClick={() => setCurrentStep(1)} // Go back to step 1
+              >
+                Back
+              </Button>
+
+              <div className="text-center text-sm">
+                Already have an account?{" "}
+                <Link href="/login" className="text-primary hover:underline">
+                  Sign in
+                </Link>
+              </div>
+            </CardFooter>
+          </form>
+        )}
       </Card>
     </div>
   );
