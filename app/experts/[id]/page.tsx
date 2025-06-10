@@ -1,10 +1,8 @@
 // app/experts/[id]/page.tsx
-"use client"; // Add this line at the very top of the file
+"use client";
 
 import { useState, useEffect } from "react";
-// Import your components and Firebase utilities
-// For example:
-import { db } from "@/app/firebase/firebaseClient"; // Ensure this path is correct
+import { db } from "@/app/firebase/firebaseClient";
 import {
   doc,
   getDoc,
@@ -12,6 +10,7 @@ import {
   query,
   where,
   getDocs,
+  orderBy,
 } from "firebase/firestore";
 import {
   Card,
@@ -19,24 +18,27 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  CardFooter,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Mail, Calendar, Video } from "lucide-react";
+import { Mail, Calendar, Video, Clock, Users, ArrowLeft } from "lucide-react"; // Added ArrowLeft
 import Link from "next/link";
 import GhibliAvatar from "@/components/ghibli-avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-// Define your interfaces (Expert, Testimonial, UpcomingSession)
+// Define your interfaces (Expert, Testimonial, and the more detailed QASession)
 interface Expert {
   id: string;
   name: string;
   role: string;
   experience: string;
-  description: string;
+  description: string; // This might be redundant if 'bio' is used for the main description
   tags: string[];
   color: string;
-  bio: string;
+  bio: string; // More detailed description
   initials: string;
   rating?: number;
   students?: number;
@@ -46,24 +48,29 @@ interface Expert {
 
 interface Testimonial {
   id: string;
-  expertId: string;
-  studentName: string;
-  studentAvatarUrl?: string;
+  name: string; // From studentName to name to match populateFirestore.js
+  college?: string; // Added college, made optional as per seed data
   text: string;
   rating: number;
-  date: string; // Consider using Date type or Firebase Timestamp
+  initials: string; // Added initials as per seed data
+  studentAvatarUrl?: string; // Re-added and made optional
 }
 
-interface UpcomingSession {
+interface QASession {
   id: string;
-  expertId: string;
+  expertId: string; // Add this field for linking
   title: string;
-  date: string; // Consider using Date type or Firebase Timestamp
+  trainer: string; // Or derive from expert data
+  date: string; // Store as string or Firebase Timestamp
   time: string;
-  type: "online" | "in-person";
-  link?: string; // For online sessions
-  location?: string; // For in-person sessions
-  price: number;
+  attendees: number;
+  status: "upcoming" | "past"; // Use status for filtering
+  tags: string[];
+  initials: string; // Or derive from expert data
+  color: string; // Or derive from expert data
+  description: string;
+  registrationLink?: string; // Optional, if you have this in Firestore
+  recordingLink?: string; // Optional, if you have this in Firestore
 }
 
 export default function ExpertProfilePage({
@@ -71,38 +78,31 @@ export default function ExpertProfilePage({
 }: {
   params: { id: string };
 }) {
-  // THIS IS THE LINE CAUSING THE WARNING
-  // Next.js is hinting that `params` *could* be a Promise.
-  // In a 'use client' component, it typically isn't when rendered on the client.
-  // However, during SSR or build, Next.js's compiler might see it this way.
   const { id } = params;
 
   const [expert, setExpert] = useState<Expert | null>(null);
   const [testimonials, setTestimonials] = useState<Testimonial[]>([]);
-  const [upcomingSessions, setUpcomingSessions] = useState<UpcomingSession[]>(
-    []
-  );
+  // Use QASession for all sessions and filter them later
+  const [qASessions, setQASessions] = useState<QASession[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchExpertData = async () => {
       try {
-        // Fetch expert details
+        // 1. Fetch expert details
         const expertDocRef = doc(db, "experts", id);
         const expertDocSnap = await getDoc(expertDocRef);
 
         if (expertDocSnap.exists()) {
-          setExpert({
-            id: expertDocSnap.id,
-            ...expertDocSnap.data(),
-          } as Expert);
+          const expertData = { id: expertDocSnap.id, ...expertDocSnap.data() } as Expert;
+          setExpert(expertData);
 
-          // Fetch testimonials for this expert
-          const testimonialsCollection = collection(db, "testimonials");
+          // 2. Fetch testimonials for this expert from the SUBCOLLECTION
+          const testimonialsSubCollectionRef = collection(expertDocRef, "testimonials");
           const qTestimonials = query(
-            testimonialsCollection,
-            where("expertId", "==", id)
+            testimonialsSubCollectionRef,
+            orderBy("id") // Assuming 'id' is a string. If you have a date in testimonials, orderBy('date', 'desc')
           );
           const testimonialSnapshot = await getDocs(qTestimonials);
           const testimonialsList = testimonialSnapshot.docs.map((doc) => ({
@@ -111,18 +111,20 @@ export default function ExpertProfilePage({
           })) as Testimonial[];
           setTestimonials(testimonialsList);
 
-          // Fetch upcoming sessions for this expert
-          const sessionsCollection = collection(db, "upcomingSessions");
+          // 3. Fetch QA Sessions for this expert (This part was already correct for top-level collection)
+          const qaSessionsCollection = collection(db, "qASessions");
           const qSessions = query(
-            sessionsCollection,
-            where("expertId", "==", id)
+            qaSessionsCollection,
+            where("expertId", "==", id),
+            orderBy("date", "desc")
           );
           const sessionSnapshot = await getDocs(qSessions);
           const sessionsList = sessionSnapshot.docs.map((doc) => ({
             id: doc.id,
             ...doc.data(),
-          })) as UpcomingSession[];
-          setUpcomingSessions(sessionsList);
+          })) as QASession[];
+          setQASessions(sessionsList);
+
         } else {
           setError("Expert not found.");
         }
@@ -135,7 +137,7 @@ export default function ExpertProfilePage({
     };
 
     fetchExpertData();
-  }, [id]); // Re-run effect if ID changes (though usually not on a profile page)
+  }, [id]);
 
   if (loading) {
     return (
@@ -161,8 +163,23 @@ export default function ExpertProfilePage({
     );
   }
 
+  // Filter sessions into upcoming and past based on status
+  const upcomingSessions = qASessions.filter((session) => session.status === "upcoming");
+  const pastSessions = qASessions.filter((session) => session.status === "past");
+
+
   return (
     <div className="container mx-auto py-8 px-4">
+      {/* Back to Experts button */}
+      <div className="mb-6">
+        <Link href="/experts" passHref>
+          <Button variant="ghost" className="text-muted-foreground hover:text-primary">
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to Experts
+          </Button>
+        </Link>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
         {/* Expert Details Card (Main column) */}
         <div className="md:col-span-2">
@@ -272,17 +289,26 @@ export default function ExpertProfilePage({
                       "{testimonial.text}"
                     </p>
                     <div className="flex items-center mt-2">
-                      {/* You might want a default avatar if studentAvatarUrl is not available */}
-                      {testimonial.studentAvatarUrl && (
-                        <img
-                          src={testimonial.studentAvatarUrl}
-                          alt={testimonial.studentName}
-                          className="w-8 h-8 rounded-full mr-2"
-                        />
-                      )}
+                      <Avatar className="w-8 h-8 rounded-full mr-2">
+                        {testimonial.studentAvatarUrl ? (
+                          <img
+                            src={testimonial.studentAvatarUrl}
+                            alt={testimonial.name}
+                          />
+                        ) : (
+                          <AvatarFallback>
+                            {testimonial.initials || testimonial.name.charAt(0).toUpperCase()}
+                          </AvatarFallback>
+                        )}
+                      </Avatar>
                       <p className="font-semibold text-sm">
-                        {testimonial.studentName}
+                        {testimonial.name}
                       </p>
+                      {testimonial.college && (
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          ({testimonial.college})
+                        </span>
+                      )}
                       <span className="ml-auto text-amber-500 text-sm">
                         {"⭐".repeat(testimonial.rating)}
                       </span>
@@ -297,46 +323,176 @@ export default function ExpertProfilePage({
             </CardContent>
           </Card>
 
-          {/* Upcoming Sessions */}
+          {/* Q&A Sessions (Integrated from QASessionsPage structure) */}
           <Card>
             <CardHeader>
-              <CardTitle>Upcoming Sessions</CardTitle>
+              <CardTitle>Q&A Sessions</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              {upcomingSessions.length > 0 ? (
-                upcomingSessions.map((session) => (
-                  <div
-                    key={session.id}
-                    className="border-b pb-4 last:border-b-0 last:pb-0"
-                  >
-                    <h5 className="font-semibold">{session.title}</h5>
-                    <p className="text-sm text-muted-foreground">
-                      {session.date} at {session.time} ({session.type})
-                    </p>
-                    {session.type === "online" && session.link && (
-                      <Link
-                        href={session.link}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        <Button variant="link" className="px-0 h-auto">
-                          Join Session
-                        </Button>
-                      </Link>
-                    )}
-                    {session.type === "in-person" && session.location && (
-                      <p className="text-sm text-muted-foreground">
-                        {session.location}
+            <CardContent>
+              <Tabs defaultValue="upcoming" className="mt-0">
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="upcoming">Upcoming</TabsTrigger>
+                  <TabsTrigger value="past">Past</TabsTrigger>
+                </TabsList>
+                <TabsContent value="upcoming" className="mt-4">
+                  <div className="space-y-4">
+                    {upcomingSessions.length > 0 ? (
+                      upcomingSessions.map((session) => (
+                        <Card
+                          key={session.id}
+                          className="overflow-hidden hover:shadow-md transition-shadow"
+                        >
+                          <CardHeader className="p-4 pb-0">
+                            <div className="flex items-center gap-3">
+                              <Avatar className="w-12 h-12">
+                                <AvatarFallback
+                                  className={`bg-${session.color}-600 text-white text-md font-bold`}
+                                >
+                                  {session.initials}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div>
+                                <CardTitle className="text-base">
+                                  {session.title}
+                                </CardTitle>
+                                <CardDescription className="text-xs">
+                                  with {session.trainer}
+                                </CardDescription>
+                              </div>
+                            </div>
+                          </CardHeader>
+                          <CardContent className="p-4 pt-2">
+                            <p className="text-xs text-muted-foreground mb-2 line-clamp-2">
+                              {session.description}
+                            </p>
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                <Calendar className="h-3 w-3" />
+                                <span>{session.date}</span>
+                              </div>
+                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                <Clock className="h-3 w-3" />
+                                <span>{session.time}</span>
+                              </div>
+                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                <Users className="h-3 w-3" />
+                                <span>{session.attendees} attending</span>
+                              </div>
+                              <div className="flex flex-wrap gap-1 mt-2">
+                                {session.tags.map((tag, i) => (
+                                  <Badge
+                                    key={i}
+                                    variant="secondary"
+                                    className="text-xs px-2 py-0.5"
+                                  >
+                                    {tag}
+                                  </Badge>
+                                ))}
+                              </div>
+                            </div>
+                          </CardContent>
+                          <CardFooter className="flex justify-between p-4 pt-0">
+                            {session.registrationLink ? (
+                              <Button size="sm" asChild>
+                                <Link href={session.registrationLink}>
+                                  Register Now
+                                </Link>
+                              </Button>
+                            ) : (
+                              <Button size="sm" disabled>
+                                Register Now
+                              </Button>
+                            )}
+                          </CardFooter>
+                        </Card>
+                      ))
+                    ) : (
+                      <p className="text-muted-foreground text-sm text-center">
+                        No upcoming sessions for this expert.
                       </p>
                     )}
-                    <p className="font-bold text-right">₹{session.price}</p>
                   </div>
-                ))
-              ) : (
-                <p className="text-muted-foreground text-sm">
-                  No upcoming sessions.
-                </p>
-              )}
+                </TabsContent>
+                <TabsContent value="past" className="mt-4">
+                  <div className="space-y-4">
+                    {pastSessions.length > 0 ? (
+                      pastSessions.map((session) => (
+                        <Card
+                          key={session.id}
+                          className="overflow-hidden hover:shadow-md transition-shadow opacity-70"
+                        >
+                          <CardHeader className="p-4 pb-0">
+                            <div className="flex items-center gap-3">
+                              <Avatar className="w-12 h-12">
+                                <AvatarFallback
+                                  className={`bg-${session.color}-600 text-white text-md font-bold`}
+                                >
+                                  {session.initials}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div>
+                                <CardTitle className="text-base">
+                                  {session.title}
+                                </CardTitle>
+                                <CardDescription className="text-xs">
+                                  with {session.trainer}
+                                </CardDescription>
+                              </div>
+                            </div>
+                          </CardHeader>
+                          <CardContent className="p-4 pt-2">
+                            <p className="text-xs text-muted-foreground mb-2 line-clamp-2">
+                              {session.description}
+                            </p>
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                <Calendar className="h-3 w-3" />
+                                <span>{session.date}</span>
+                              </div>
+                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                <Clock className="h-3 w-3" />
+                                <span>{session.time}</span>
+                              </div>
+                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                <Users className="h-3 w-3" />
+                                <span>{session.attendees} attended</span>
+                              </div>
+                              <div className="flex flex-wrap gap-1 mt-2">
+                                {session.tags.map((tag, i) => (
+                                  <Badge
+                                    key={i}
+                                    variant="secondary"
+                                    className="text-xs px-2 py-0.5"
+                                  >
+                                    {tag}
+                                  </Badge>
+                                ))}
+                              </div>
+                            </div>
+                          </CardContent>
+                          <CardFooter className="flex justify-center p-4 pt-0">
+                            {session.recordingLink ? (
+                              <Button variant="outline" size="sm" asChild>
+                                <Link href={session.recordingLink}>
+                                  Watch Recording
+                                </Link>
+                              </Button>
+                            ) : (
+                              <Button variant="outline" size="sm" disabled>
+                                Recording Not Available
+                              </Button>
+                            )}
+                          </CardFooter>
+                        </Card>
+                      ))
+                    ) : (
+                      <p className="text-muted-foreground text-sm text-center">
+                        No past sessions for this expert.
+                      </p>
+                    )}
+                  </div>
+                </TabsContent>
+              </Tabs>
             </CardContent>
           </Card>
         </div>
