@@ -32,7 +32,8 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [college, setCollege] = useState("");
   const [yearOfStudy, setYearOfStudy] = useState("");
-  const [selectedRole, setSelectedRole] = useState("user"); // State for role, default to 'user' (student)
+  // --- EDITED: Changed 'user' to 'student' for consistency with AuthContext UserData interface ---
+  const [selectedRole, setSelectedRole] = useState<"student" | "expert">("student"); // State for role, default to 'student'
   const [agreeTerms, setAgreeTerms] = useState(false);
 
   // UI states
@@ -85,7 +86,8 @@ export default function RegisterPage() {
         college: college,
         year_of_study: yearOfStudy,
         role: selectedRole, // Include the selected role
-        status: selectedRole === 'user' ? 'approved' : 'pending', // Set status based on role
+        // --- EDITED: Changed 'user' to 'student' for consistency ---
+        status: selectedRole === 'student' ? 'approved' : 'pending', // Set status based on role
         createdAt: new Date().toISOString(),
       };
 
@@ -108,11 +110,8 @@ export default function RegisterPage() {
 
       console.log("User profile saved to Firestore:", data.message);
 
-      // We don't store authToken/userInfo in localStorage here anymore.
-      // AuthContext will handle it upon onAuthStateChanged.
-      // After registration, AuthContext will fetch the new user's profile and then redirect.
-      // For now, we'll redirect immediately to login, allowing AuthContext to handle the full flow.
-      router.push("/login?registered=true"); // Redirect to login after successful registration
+      // --- EDITED: REMOVED explicit redirection. AuthContext will handle it. ---
+      // router.push("/login?registered=true"); // REMOVED
 
     } catch (err: any) {
       console.error("Registration error:", err);
@@ -147,7 +146,8 @@ export default function RegisterPage() {
 
       // Use the selectedRole from the form for Google sign-in (already present in state)
       const roleForGoogleUser = selectedRole;
-      const statusForGoogleUser = roleForGoogleUser === 'user' ? 'approved' : 'pending';
+      // --- EDITED: Changed 'user' to 'student' for consistency ---
+      const statusForGoogleUser = roleForGoogleUser === 'student' ? 'approved' : 'pending';
 
       const userProfileData = {
         uid: user.uid,
@@ -179,8 +179,8 @@ export default function RegisterPage() {
 
       console.log("Google user profile saved to Firestore:", data.message);
 
-      // Similar to email/password, let AuthContext handle subsequent state and redirection
-      router.push("/login?registered=true");
+      // --- EDITED: REMOVED explicit redirection. AuthContext will handle it. ---
+      // router.push("/login?registered=true"); // REMOVED
 
     } catch (err: any) {
       console.error("Google sign-in error:", err);
@@ -217,14 +217,16 @@ export default function RegisterPage() {
                 <Select
                   name="role"
                   value={selectedRole}
-                  onValueChange={(value) => setSelectedRole(value as 'user' | 'expert')} // Cast to ensure correct type
+                  // --- EDITED: Cast to ensure correct type 'student' | 'expert' ---
+                  onValueChange={(value) => setSelectedRole(value as "student" | "expert")}
                   required
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select your role" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="user">Student/Candidate</SelectItem>
+                    {/* --- EDITED: Changed value to 'student' --- */}
+                    <SelectItem value="student">Student/Candidate</SelectItem>
                     <SelectItem value="expert">Expert/Trainer</SelectItem>
                     {/* Admin role is NOT offered on public registration for security */}
                   </SelectContent>
@@ -349,7 +351,8 @@ export default function RegisterPage() {
                 <Label htmlFor="selectedRoleDisplay">Selected Role</Label>
                 <Input
                   id="selectedRoleDisplay"
-                  value={selectedRole === 'user' ? 'Student/Candidate' : 'Expert/Trainer'}
+                  // --- EDITED: Changed 'user' to 'student' ---
+                  value={selectedRole === 'student' ? 'Student/Candidate' : 'Expert/Trainer'}
                   readOnly
                   className="bg-muted-foreground/10" // Make it look like a read-only field
                 />
