@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation"; // Correct import for useRouter in Next.js App Router
 import { createUserWithEmailAndPassword, signInWithPopup } from "firebase/auth"; // Firebase Auth functions
-import { auth, provider } from "@/config/firebase"; // Your Firebase client-side auth instance and Google provider
+import { doc, setDoc, serverTimestamp } from "firebase/firestore"; // Import Firestore functions: doc, setDoc, serverTimestamp
+import { auth, provider, db } from "@/config/firebase"; // Your Firebase client-side auth instance, Google provider, and db
 
 import { Button } from "@/components/ui/button";
 import {
@@ -21,22 +22,22 @@ import { Checkbox } from "@/components/ui/checkbox";
 import Link from "next/link";
 
 export default function RegisterPage() {
-  // --- New state for multi-step form ---
-  const [currentStep, setCurrentStep] = useState(1); // 1: Role selection, 2: Details/Google signup
-  // --- End new state ---
+  const [currentStep, setCurrentStep] = useState(1);
 
-  // State for all form fields
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [college, setCollege] = useState("");
   const [yearOfStudy, setYearOfStudy] = useState("");
-  // --- EDITED: Changed 'user' to 'student' for consistency with AuthContext UserData interface ---
-  const [selectedRole, setSelectedRole] = useState<"student" | "expert">("student"); // State for role, default to 'student'
+  const [selectedRole, setSelectedRole] = useState<"student" | "expert">("student");
   const [agreeTerms, setAgreeTerms] = useState(false);
 
-  // UI states
+  // New states for expert-specific fields (for initial population)
+  const [expertProfessionalRole, setExpertProfessionalRole] = useState(""); // e.g., "Aptitude Expert"
+  const [expertBio, setExpertBio] = useState("");
+  const [expertTags, setExpertTags] = useState(""); // Comma-separated tags
+
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,15 +63,22 @@ export default function RegisterPage() {
       setError("Please agree to the terms and conditions.");
       return;
     }
+    // Basic validation for common fields
     if (!email || !password || !firstName || !lastName || !college || !yearOfStudy || !selectedRole) {
       setError("Please fill in all required fields.");
       return;
+    }
+    // Additional validation for expert fields if role is expert
+    if (selectedRole === 'expert' && (!expertProfessionalRole || !expertBio || !expertTags)) {
+        setError("Please fill in all required expert details.");
+        return;
     }
 
     setLoading(true);
     setError(null);
 
     try {
+      // 1. Create user with Firebase Authentication
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
@@ -78,6 +86,7 @@ export default function RegisterPage() {
 
       const token = await user.getIdToken();
 
+      // 2. Prepare data for the 'users' collection (all users get this)
       const userProfileData = {
         uid: user.uid,
         email: user.email,
@@ -85,19 +94,20 @@ export default function RegisterPage() {
         lastName: lastName,
         college: college,
         year_of_study: yearOfStudy,
-        role: selectedRole, // Include the selected role
-        // --- EDITED: Changed 'user' to 'student' for consistency ---
-        status: selectedRole === 'student' ? 'approved' : 'pending', // Set status based on role
-        createdAt: new Date().toISOString(),
+        role: selectedRole, // 'student' or 'expert'
+        status: selectedRole === 'student' ? 'approved' : 'pending', // 'approved' for student, 'pending' for expert by default
+        isExpertApproved: selectedRole === 'expert' ? false : null, // Only for experts, defaults to false
+        createdAt: serverTimestamp(), // Use Firestore server timestamp
       };
 
-      console.log("Sending user profile data to backend:", userProfileData);
+      console.log("Sending user profile data to backend (users collection):", userProfileData);
 
+      // Send to /api/users endpoint to store in 'users' collection (backend handles doc(uid).set())
       const res = await fetch("/api/users", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`
+          "Authorization": `Bearer ${token}` // Pass ID token for server-side auth check
         },
         body: JSON.stringify(userProfileData)
       });
@@ -108,14 +118,42 @@ export default function RegisterPage() {
         throw new Error(data.error || "Failed to save user profile to database.");
       }
 
-      console.log("User profile saved to Firestore:", data.message);
+      console.log("User profile saved to Firestore (users collection):", data.message);
 
-      // --- EDITED: REMOVED explicit redirection. AuthContext will handle it. ---
-      // router.push("/login?registered=true"); // REMOVED
+      // 3. Conditionally create document in 'experts' collection if role is expert
+      if (selectedRole === 'expert') {
+        const expertProfileForCollection = {
+          // Fields that are specific to the expert's public profile
+          name: `${firstName} ${lastName}`, // Combined name for display
+          bio: expertBio,
+          role: expertProfessionalRole, // The professional role like "Aptitude Expert"
+          tags: expertTags.split(',').map(tag => tag.trim()).filter(tag => tag), // Split and clean tags
+          
+          // Initialize other expert fields with default values
+          experience: 'Newly Joined', // Default value
+          color: 'gray', // Default color for avatar background, can be updated later
+          description: `Specializes in ${expertProfessionalRole || 'various subjects'}.`, // Basic description
+          initials: `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase(),
+          rating: 0,
+          resources: 0,
+          sessions: 0,
+          students: 0,
+          // NOTE: uid, email, isExpertApproved, createdAt are in the 'users' collection
+          // but you might want to link it with expertId: user.uid,
+          // or just assume the doc ID is the UID
+        };
+        console.log("Creating expert profile in 'experts' collection:", expertProfileForCollection);
+        // Use setDoc with user.uid as the document ID for the experts collection
+        await setDoc(doc(db, "experts", user.uid), expertProfileForCollection);
+        console.log("Expert profile created in 'experts' collection.");
+      }
+
+      // AuthContext will handle redirection after successful login/registration
+      // (as it observes onAuthStateChanged and fetches user data)
 
     } catch (err: any) {
       console.error("Registration error:", err);
-
+      // More user-friendly error messages based on Firebase error codes
       if (err.code === 'auth/email-already-in-use') {
         setError('This email is already registered. Please try logging in.');
       } else if (err.code === 'auth/weak-password') {
@@ -130,7 +168,7 @@ export default function RegisterPage() {
     }
   };
 
-  // Handles Google Sign-in
+  // Handles Google Sign-in (similar logic, but Google provides some fields)
   const handleGoogleSignIn = async () => {
     setGoogleLoading(true);
     setError(null);
@@ -144,24 +182,21 @@ export default function RegisterPage() {
       const token = await user.getIdToken();
       const { firstName: googleFirstName, lastName: googleLastName } = parseDisplayName(user.displayName);
 
-      // Use the selectedRole from the form for Google sign-in (already present in state)
-      const roleForGoogleUser = selectedRole;
-      // --- EDITED: Changed 'user' to 'student' for consistency ---
-      const statusForGoogleUser = roleForGoogleUser === 'student' ? 'approved' : 'pending';
-
+      // 2. Prepare data for the 'users' collection (all users get this)
       const userProfileData = {
         uid: user.uid,
         email: user.email || "",
         firstName: googleFirstName,
         lastName: googleLastName,
-        college: "N/A", // Google sign-in doesn't provide this, set default or ask later
-        year_of_study: "N/A", // Google sign-in doesn't provide this, set default or ask later
-        role: roleForGoogleUser, // Assign the selected role for Google sign-in
-        status: statusForGoogleUser, // Assign status based on selected role
-        createdAt: new Date().toISOString(),
+        college: "N/A", // Google doesn't provide, default
+        year_of_study: "N/A", // Google doesn't provide, default
+        role: selectedRole,
+        status: selectedRole === 'student' ? 'approved' : 'pending',
+        isExpertApproved: selectedRole === 'expert' ? false : null,
+        createdAt: serverTimestamp(),
       };
 
-      console.log("Sending Google user profile data to backend:", userProfileData);
+      console.log("Sending Google user profile data to backend (users collection):", userProfileData);
 
       const res = await fetch("/api/users", {
         method: "POST",
@@ -177,10 +212,31 @@ export default function RegisterPage() {
         throw new Error(data.error || "Failed to save Google user profile.");
       }
 
-      console.log("Google user profile saved to Firestore:", data.message);
+      console.log("Google user profile saved to Firestore (users collection):", data.message);
 
-      // --- EDITED: REMOVED explicit redirection. AuthContext will handle it. ---
-      // router.push("/login?registered=true"); // REMOVED
+      // 3. Conditionally create document in 'experts' collection if role is expert
+      if (selectedRole === 'expert') {
+        const expertProfileForCollection = {
+          name: `${googleFirstName} ${googleLastName}`,
+          bio: expertBio,
+          role: expertProfessionalRole,
+          tags: expertTags.split(',').map(tag => tag.trim()).filter(tag => tag),
+          
+          experience: 'Newly Joined',
+          color: 'gray',
+          description: `Specializes in ${expertProfessionalRole || 'various subjects'}.`,
+          initials: `${googleFirstName.charAt(0)}${googleLastName.charAt(0)}`.toUpperCase(),
+          rating: 0,
+          resources: 0,
+          sessions: 0,
+          students: 0,
+        };
+        console.log("Creating expert profile in 'experts' collection:", expertProfileForCollection);
+        await setDoc(doc(db, "experts", user.uid), expertProfileForCollection);
+        console.log("Expert profile created in 'experts' collection.");
+      }
+
+      // AuthContext will handle redirection after successful login/registration
 
     } catch (err: any) {
       console.error("Google sign-in error:", err);
@@ -217,7 +273,6 @@ export default function RegisterPage() {
                 <Select
                   name="role"
                   value={selectedRole}
-                  // --- EDITED: Cast to ensure correct type 'student' | 'expert' ---
                   onValueChange={(value) => setSelectedRole(value as "student" | "expert")}
                   required
                 >
@@ -225,10 +280,8 @@ export default function RegisterPage() {
                     <SelectValue placeholder="Select your role" />
                   </SelectTrigger>
                   <SelectContent>
-                    {/* --- EDITED: Changed value to 'student' --- */}
                     <SelectItem value="student">Student/Candidate</SelectItem>
                     <SelectItem value="expert">Expert/Trainer</SelectItem>
-                    {/* Admin role is NOT offered on public registration for security */}
                   </SelectContent>
                 </Select>
               </div>
@@ -239,8 +292,8 @@ export default function RegisterPage() {
                 className="w-full"
                 onClick={() => {
                   if (selectedRole) {
-                    setCurrentStep(2); // Proceed to step 2
-                    setError(null); // Clear any previous error
+                    setError(null);
+                    setCurrentStep(2);
                   } else {
                     setError("Please select a role to proceed.");
                   }
@@ -315,43 +368,86 @@ export default function RegisterPage() {
                   required
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="college">College/University</Label>
-                <Input
-                  name="college"
-                  id="college"
-                  placeholder="Enter your college"
-                  value={college}
-                  onChange={(e) => setCollege(e.target.value)}
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="year">Year of Study</Label>
-                <Select
-                  name="year"
-                  value={yearOfStudy}
-                  onValueChange={(value) => setYearOfStudy(value)}
-                  required
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select year" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1">First Year</SelectItem>
-                    <SelectItem value="2">Second Year</SelectItem>
-                    <SelectItem value="3">Third Year</SelectItem>
-                    <SelectItem value="4">Final Year</SelectItem>
-                    <SelectItem value="pg">Post Graduate</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              {selectedRole === 'student' && (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="college">College/University</Label>
+                    <Input
+                      name="college"
+                      id="college"
+                      placeholder="Enter your college"
+                      value={college}
+                      onChange={(e) => setCollege(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="year">Year of Study</Label>
+                    <Select
+                      name="year"
+                      value={yearOfStudy}
+                      onValueChange={(value) => setYearOfStudy(value)}
+                      required
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select year" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="1">First Year</SelectItem>
+                        <SelectItem value="2">Second Year</SelectItem>
+                        <SelectItem value="3">Third Year</SelectItem>
+                        <SelectItem value="4">Final Year</SelectItem>
+                        <SelectItem value="pg">Post Graduate</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              )}
+
+              {selectedRole === 'expert' && (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="expertRole">Your Professional Role (e.g., "Aptitude Expert")</Label>
+                    <Input
+                      name="expertRole"
+                      id="expertRole"
+                      placeholder="e.g., Aptitude Expert, Soft Skills Trainer"
+                      value={expertProfessionalRole}
+                      onChange={(e) => setExpertProfessionalRole(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="expertBio">Your Bio</Label>
+                    <textarea
+                      id="expertBio"
+                      rows={4}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                      value={expertBio}
+                      onChange={(e) => setExpertBio(e.target.value)}
+                      placeholder="Tell us about your experience and expertise."
+                      required
+                    ></textarea>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="expertTags">Tags (comma-separated, e.g., "Aptitude, Vedic Math")</Label>
+                    <Input
+                      name="expertTags"
+                      id="expertTags"
+                      placeholder="e.g., Aptitude, TCS NQT, Soft Skills"
+                      value={expertTags}
+                      onChange={(e) => setExpertTags(e.target.value)}
+                      required
+                    />
+                  </div>
+                </>
+              )}
+
               {/* Role display (read-only) for context */}
               <div className="space-y-2">
                 <Label htmlFor="selectedRoleDisplay">Selected Role</Label>
                 <Input
                   id="selectedRoleDisplay"
-                  // --- EDITED: Changed 'user' to 'student' ---
                   value={selectedRole === 'student' ? 'Student/Candidate' : 'Expert/Trainer'}
                   readOnly
                   className="bg-muted-foreground/10" // Make it look like a read-only field
@@ -393,7 +489,7 @@ export default function RegisterPage() {
                 type="button"
                 variant="ghost"
                 className="w-full mt-2"
-                onClick={() => setCurrentStep(1)} // Go back to step 1
+                onClick={() => setCurrentStep(1)}
               >
                 Back
               </Button>

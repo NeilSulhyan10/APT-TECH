@@ -39,7 +39,7 @@ export default function Navbar() {
   const expertRoutes = [
     { href: "/experts/dashboard", label: "Home" },
     { href: "/experts/sessions", label: "Sessions" },
-    { href: "/experts/forum", label: "Forum" },
+    { href: "/forums", label: "Forum" },
     { href: "/experts/q&a", label: "Q&A" }, // Using '&' in path as per request
   ];
 
