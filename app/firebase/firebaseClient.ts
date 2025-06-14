@@ -1,5 +1,5 @@
 // app/firebase/client.ts
-import { initializeApp } from "firebase/app";
+import { initializeApp, getApps, getApp } from "firebase/app"; // Import getApps and getApp
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
@@ -12,7 +12,17 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-const app = initializeApp(firebaseConfig);
+let app;
+
+// Check if a Firebase app has already been initialized
+if (getApps().length === 0) {
+  // If no Firebase apps are currently initialized, create the default app
+  app = initializeApp(firebaseConfig);
+} else {
+  // If an app is already initialized, retrieve the default app instance
+  app = getApp();
+}
+
 const auth = getAuth(app);
 const db = getFirestore(app); // Initialize Firestore
 
