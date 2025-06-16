@@ -40,7 +40,10 @@ export default function Navbar() {
     { href: "/experts/dashboard", label: "Home" },
     { href: "/experts/sessions", label: "Sessions" },
     { href: "/forums", label: "Forum" },
-    { href: "/experts/q&a", label: "Q&A" }, // Using '&' in path as per request
+    { href: "/experts/q&a", label: "Q&A" },
+    { href: "/experts", label: "Experts" },
+ // Using '&' in path as per request
+     // Using '&' in path as per request
   ];
 
   // Select the appropriate routes based on the user's role
