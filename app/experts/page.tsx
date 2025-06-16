@@ -3,11 +3,11 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Mail, Calendar, Video, Search, Filter } from "lucide-react"
+import { Mail, Calendar, Video, Search } from "lucide-react" // Removed Filter as it's not used
 import Link from "next/link"
 import GhibliAvatar from "@/components/ghibli-avatar"
 
-import { db } from "@/app/firebase/firebaseClient" // Assuming the correct path to firebase/client
+import { db } from "@/app/firebase/firebaseClient"
 import { collection, getDocs, DocumentData } from "firebase/firestore"
 import { useEffect, useState } from "react"
 
@@ -38,10 +38,26 @@ export default function ExpertsPage() {
       try {
         const expertsCollection = collection(db, "experts");
         const expertSnapshot = await getDocs(expertsCollection);
-        const expertsList = expertSnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data() as Omit<Expert, 'id'>
-        }));
+        const expertsList = expertSnapshot.docs.map(doc => {
+          const data = doc.data() as DocumentData; // Get document data
+          return {
+            id: doc.id,
+            // Provide default values for potentially missing or null fields
+            name: (data.name as string) || '',
+            role: (data.role as string) || '',
+            experience: (data.experience as string) || '',
+            description: (data.description as string) || '',
+            // Ensure tags is an array and contains only strings
+            tags: Array.isArray(data.tags) ? (data.tags as string[]).filter(tag => typeof tag === 'string') : [],
+            color: (data.color as string) || 'gray', // Provide a default color
+            bio: (data.bio as string) || '',
+            initials: (data.initials as string) || '', // Provide default initials
+            rating: data.rating as number | undefined,
+            students: data.students as number | undefined,
+            sessions: data.sessions as number | undefined,
+            resources: data.resources as number | undefined,
+          };
+        });
         setExperts(expertsList);
       } catch (err) {
         console.error("Error fetching experts:", err);
@@ -52,14 +68,21 @@ export default function ExpertsPage() {
     };
 
     fetchExperts();
-  }, []);
+  }, []); // Empty dependency array means this runs once on mount
 
-  const filteredExperts = experts.filter(expert =>
-    expert.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    expert.role.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    expert.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    expert.tags.some(tag => tag.toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+  const filteredExperts = experts.filter(expert => {
+    const lowerCaseSearchTerm = searchTerm.toLowerCase();
+
+    // Now, these properties are guaranteed to be strings or string arrays,
+    // so toLowerCase() and .some() will not error.
+    const nameMatches = expert.name.toLowerCase().includes(lowerCaseSearchTerm);
+    const roleMatches = expert.role.toLowerCase().includes(lowerCaseSearchTerm);
+    const descriptionMatches = expert.description.toLowerCase().includes(lowerCaseSearchTerm);
+
+    const tagsMatches = expert.tags.some(tag => tag.toLowerCase().includes(lowerCaseSearchTerm));
+
+    return nameMatches || roleMatches || descriptionMatches || tagsMatches;
+  });
 
   if (loading) {
     return (
@@ -98,8 +121,7 @@ export default function ExpertsPage() {
           <p className="col-span-full text-center text-muted-foreground">No experts found matching your search.</p>
         ) : (
           filteredExperts.map((expert) => (
-            <Card key={expert.id} className="overflow-hidden flex flex-col"> {/* Removed 'group' and 'relative' as they are not needed for a non-hover effect */}
-              {/* This is the top part of the card, visible always */}
+            <Card key={expert.id} className="overflow-hidden flex flex-col">
               <div className={`h-32 bg-${expert.color}-500 relative overflow-hidden`}>
                 <div className="absolute inset-0 flex items-center justify-center">
                   <GhibliAvatar
@@ -116,10 +138,9 @@ export default function ExpertsPage() {
                   {expert.role} | {expert.experience}
                 </CardDescription>
               </CardHeader>
-              <CardContent className="text-center flex-grow flex flex-col justify-between"> {/* Added flex-grow */}
+              <CardContent className="text-center flex-grow flex flex-col justify-between">
                 <p className="text-muted-foreground text-sm mb-4 line-clamp-3">{expert.description}</p>
-                {/* Display the full bio if desired, possibly with line-clamp */}
-                <p className="text-sm text-muted-foreground mb-4 line-clamp-4">{expert.bio}</p> {/* Displaying bio directly */}
+                <p className="text-sm text-muted-foreground mb-4 line-clamp-4">{expert.bio}</p>
                 <div className="flex flex-wrap justify-center gap-2 mb-4">
                   {expert.tags.map((tag, i) => (
                     <Badge key={i} variant="secondary">
@@ -127,7 +148,6 @@ export default function ExpertsPage() {
                     </Badge>
                   ))}
                 </div>
-                {/* Contact Links - now visible all the time if desired */}
                 <div className="flex space-x-4 justify-center mt-4">
                   <Link href={`/contact/${expert.id}?type=email`}>
                     <Button variant="outline" size="icon" className="w-10 h-10 rounded-full">
@@ -146,7 +166,7 @@ export default function ExpertsPage() {
                   </Link>
                 </div>
               </CardContent>
-              <CardFooter className="flex justify-center p-6 mt-auto"> {/* mt-auto pushes to bottom */}
+              <CardFooter className="flex justify-center p-6 mt-auto">
                 <Button variant="outline" className="w-full" asChild>
                   <Link href={`/experts/${expert.id}`}>View Profile</Link>
                 </Button>

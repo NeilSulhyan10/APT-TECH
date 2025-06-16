@@ -87,7 +87,6 @@ export default function ProfilePage() {
           setEditYearOfStudy(profileData.year_of_study || "");
           setEditExpertise(profileData.expertise || "");
           setEditBio(profileData.bio || "");
-          console.log("Profile data fetched from Firestore:", profileData);
         } else {
           setError("User profile not found in database. It might not have been created during signup.");
           console.warn("No user profile found for UID:", userData.uid);
@@ -145,7 +144,7 @@ export default function ProfilePage() {
     setLoading(true);
     setError(null);
     try {
-      const storedAuthToken = localStorage.getItem('authToken');
+      const storedAuthToken = localStorage.getItem('token');
       // No longer need to fetch userInfo from localStorage here, use userData from context
       if (!storedAuthToken || !userData) {
         setError("Session expired or user not logged in. Please login again.");
@@ -170,6 +169,10 @@ export default function ProfilePage() {
         updatedProfileData.bio = editBio;
       }
 
+      console.log("Attempting to send PATCH request to:", `/api/users/${userUid}`);
+    console.log("Payload:", updatedProfileData);
+    console.log("Authorization Token exists:", !!storedAuthToken);
+
       // Send PATCH request to backend API for update
       const res = await fetch(`/api/users/${userUid}`, {
         method: "PATCH",
@@ -193,7 +196,7 @@ export default function ProfilePage() {
 
       // Refresh global user data in AuthContext after successful update
       if (refreshUserData) {
-        await refreshUserData();
+        refreshUserData();
       }
 
     } catch (err: any) {

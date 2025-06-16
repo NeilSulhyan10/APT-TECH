@@ -123,7 +123,7 @@ export default function ExpertDashboardPage() {
             <p className="text-sm">
               <span className="font-semibold">Bio:</span> {userData?.bio || 'Not provided'}
             </p>
-            <Button className="w-full mt-4" onClick={() => router.push('/expert/profile-settings')}>
+            <Button className="w-full mt-4" onClick={() => router.push('/profile')}>
               Edit Profile
             </Button>
           </CardContent>

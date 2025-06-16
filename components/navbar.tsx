@@ -62,7 +62,7 @@ export default function Navbar() {
       <div className="container flex h-16 items-center justify-between">
         <div className="flex items-center gap-2">
           <Link href="/" className="flex items-center gap-2">
-            <Image src="/images/apt-tech-logo.png" alt="APT-TECH Logo" width={40} height={40} className="h-10 w-auto" />
+            <Image src="/images/apt-tech-logo.png" alt="APT-TECH Logo" width={40} height={40} />
             <span className="font-bold text-xl hidden sm:inline-block">
               <span className="text-black dark:text-white">APT</span>
               <span className="text-blue-600">TECH</span>
