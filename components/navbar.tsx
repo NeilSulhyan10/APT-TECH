@@ -31,9 +31,11 @@ export default function Navbar() {
 
   const adminRoutes = [
     { href: "/admin/dashboard", label: "Home" },
+    { href: "/admin/forums", label: "Forum" },
     { href: "/admin/manage-admins", label: "Manage Admin" },
     { href: "/admin/manage-experts", label: "Manage Experts" },
     { href: "/admin/manage-students", label: "Manage Students" },
+    
   ];
 
   const expertRoutes = [

@@ -9,23 +9,23 @@ import {
   orderBy,
   where,
   getDocs,
-  limit,
-  startAfter,
   addDoc,
   updateDoc,
+  deleteDoc,
   doc,
   increment,
   getDoc,
-  deleteDoc,
   setDoc,
+  limit,
+  startAfter,
   DocumentData,
   QueryDocumentSnapshot,
-  Timestamp
+  Timestamp,
 } from "firebase/firestore";
 import { formatDistanceToNowStrict } from 'date-fns';
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -34,13 +34,14 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-import { MessageSquare, ThumbsUp, ThumbsDown, Eye, Clock, User as UserIcon, Heart, Award, Loader2 } from "lucide-react"; // Added Award icon for experts
+import { MessageSquare, ThumbsUp, ThumbsDown, Eye, Clock, User as UserIcon, Heart, Award, Loader2, Flag } from "lucide-react"; // Added Flag icon
 import Link from "next/link";
 import Image from "next/image";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -61,6 +62,7 @@ interface Forum {
   id: string; // Firestore Document ID
   title: string;
   author: string;
+  authorId: string; // Added authorId to Forum interface
   authorImage: string;
   date: Timestamp; // Original creation timestamp of the post
   category: string;
@@ -92,16 +94,37 @@ interface Reply {
   isExpert?: boolean; // New: To mark if the reply is from an expert
 }
 
+// Interface for Category data stored in Firestore
+interface Category {
+  id: string;
+  name: string;
+  createdAt: Timestamp;
+}
+
+// New Interface for Reported Post data stored in Firestore
+interface ReportedPost {
+  id: string;
+  type: 'forum' | 'reply';
+  itemId: string;
+  itemTitle: string; // Title/snippet of the reported content
+  reporterId: string;
+  reporterName: string;
+  reason: string;
+  reportedAt: Timestamp;
+  status: 'pending' | 'dismissed' | 'actioned';
+  resolvedBy?: string;
+  resolvedAt?: Timestamp;
+}
+
 const ITEMS_PER_PAGE = 6;
 
 
 export default function ForumsPage() {
-  // Destructure user, userData, and loading from useAuth.
-  // currentUserIsExpert will be derived from userData.
   const { user, userData, loading: authLoading } = useAuth();
-  // Derived state for expert status based on userData.role
-  const currentUserIsExpert = userData?.role === 'expert'; // Assuming 'expert' is a role in your UserData
+  const currentUserIsExpert = userData?.role === 'expert';
 
+  // Initial categories for the tabs, combined with fetched ones later
+  const initialCategories = ["TCS", "Infosys", "Capgemini", "Wipro", "Aptitude", "Coding", "Other/General"];
 
   const [forums, setForums] = useState<Forum[]>([]);
   const [loading, setLoading] = useState(true);
@@ -118,13 +141,26 @@ export default function ForumsPage() {
   const [submittingReply, setSubmittingReply] = useState(false);
   const [isForumLikedByUser, setIsForumLikedByUser] = useState(false);
 
-  // States for New Discussion Modal
+  // States for New Discussion Modal (users can create discussions)
   const [isNewDiscussionModalOpen, setIsNewDiscussionModalOpen] = useState(false);
   const [newDiscussionTitle, setNewDiscussionTitle] = useState("");
   const [newDiscussionDescription, setNewDiscussionDescription] = useState("");
-  const [newDiscussionCategory, setNewDiscussionCategory] = useState("all");
+  const [newDiscussionCategory, setNewDiscussionCategory] = useState("Other/General");
   const [newDiscussionTags, setNewDiscussionTags] = useState("");
   const [submittingNewDiscussion, setSubmittingNewDiscussion] = useState(false);
+
+  // Admin action modals & states - NOT present on public forum page, but categories are needed
+  const [categories, setCategories] = useState<Category[]>([]); // Dynamic list of categories from Firestore
+
+  // State for Reporting a Forum/Reply
+  const [isReportContentModalOpen, setIsReportContentModalOpen] = useState(false);
+  const [reportReason, setReportReason] = useState("");
+  const [submittingReport, setSubmittingReport] = useState(false);
+  const [reportItemDetails, setReportItemDetails] = useState<{ id: string; title: string; type: 'forum' | 'reply' } | null>(null);
+
+  // New states to track reported status for current modal session
+  const [reportedForumIdInModal, setReportedForumIdInModal] = useState<string | null>(null);
+  const [reportedReplyIdsInModal, setReportedReplyIdsInModal] = useState<Set<string>>(new Set());
 
 
   // Function to format Firestore Timestamp to a readable string like "X days ago"
@@ -135,6 +171,27 @@ export default function ForumsPage() {
     const date = timestamp.toDate();
     return formatDistanceToNowStrict(date, { addSuffix: true });
   };
+
+  // --- Category Fetching for Tabs ---
+  const fetchCategories = useCallback(async () => {
+    try {
+      const q = query(collection(db, "categories"), orderBy("name", "asc"));
+      const querySnapshot = await getDocs(q);
+      const fetchedCategories: Category[] = [];
+      querySnapshot.forEach((doc) => {
+        fetchedCategories.push({
+          id: doc.id,
+          name: doc.data().name,
+          createdAt: doc.data().createdAt,
+        });
+      });
+      setCategories(fetchedCategories);
+    } catch (err) {
+      console.error("Error fetching categories:", err);
+      // No alert for users here, just log error
+    }
+  }, []);
+
 
   // Function to fetch forums from Firestore
   const fetchForums = useCallback(async (category: string, lastDoc: QueryDocumentSnapshot<DocumentData> | null, append: boolean = false) => {
@@ -162,24 +219,26 @@ export default function ForumsPage() {
 
       querySnapshot.forEach((doc) => {
         const data = doc.data();
-        newForums.push({
+        const forumItem: Forum = {
           id: doc.id,
           title: data.title,
           author: data.author,
+          authorId: data.authorId,
           authorImage: data.authorImage,
-          date: data.date, // Original post date
-          category: data.category,
-          tags: data.tags,
+          date: data.date,
+          category: (data.category as string || "Other/General"),
+          tags: (data.tags || []) as string[],
           replies: data.replies || 0,
           views: data.views || 0,
           likes: data.likes || 0,
           solved: data.solved || false,
-          createdAt: data.createdAt, // Original creation timestamp
-          lastActivityAt: data.lastActivityAt || data.createdAt, // Use new field, fallback to createdAt
-          description: data.description || undefined, // Map the new description field
+          createdAt: data.createdAt,
+          lastActivityAt: data.lastActivityAt || data.createdAt,
+          description: data.description || undefined,
           lastReplyText: data.lastReplyText || undefined,
           lastReplyAuthor: data.lastReplyAuthor || undefined,
-        });
+        };
+        newForums.push(forumItem);
       });
 
       setForums((prevForums) => (append ? [...prevForums, ...newForums] : newForums));
@@ -188,7 +247,7 @@ export default function ForumsPage() {
 
     } catch (err: any) {
       console.error("Error fetching forums:", err);
-      setError(`Failed to load forums: ${err.message || "Unknown error."} Please check your Firestore rules and ensure your 'category' field has the correct casing for filtering.`);
+      setError(`Failed to load forums: ${err.message || "Unknown error."}`);
     } finally {
       setLoading(false);
     }
@@ -206,18 +265,16 @@ export default function ForumsPage() {
         querySnapshot.docs.map(async (docSnap) => {
           const data = docSnap.data();
           let userVote: 'up' | 'down' | null = null;
-          if (user?.uid) { // Check user's vote only if logged in
+          if (user?.uid) {
             const voteDocRef = doc(db, `forums/${forumId}/replies/${docSnap.id}/votes`, user.uid);
             const voteDocSnap = await getDoc(voteDocRef);
             if (voteDocSnap.exists()) {
               userVote = voteDocSnap.data().type;
             }
           }
-          // Determine isExpert directly from the Firestore document's `isExpert` field
-          // This relies on `isExpert` being set when the reply is created by an actual expert user.
-          const isExpert = data.isExpert === true; // Ensure it's explicitly true
+          const isExpert = data.isExpert === true;
           return {
-            id: docSnap.id, // ID is assigned here from docSnap.id
+            id: docSnap.id,
             forumId: forumId,
             authorId: data.authorId,
             authorName: data.authorName,
@@ -227,16 +284,14 @@ export default function ForumsPage() {
             upvotes: data.upvotes || 0,
             downvotes: data.downvotes || 0,
             userVote,
-            isExpert, // Add isExpert flag
+            isExpert,
           };
         })
       );
 
-      // Sort replies: expert replies first, then by creation date (chronological for all)
       repliesList.sort((a, b) => {
-        if (a.isExpert && !b.isExpert) return -1; // Expert comes before non-expert
-        if (!a.isExpert && b.isExpert) return 1;  // Non-expert comes after expert
-        // Fallback to chronological if both are experts or both are non-experts
+        if (a.isExpert && !b.isExpert) return -1;
+        if (!a.isExpert && b.isExpert) return 1;
         return a.createdAt.toMillis() - b.createdAt.toMillis();
       });
 
@@ -273,18 +328,16 @@ export default function ForumsPage() {
       await updateDoc(forumRef, {
         views: increment(1)
       });
-      // Optimistically update local state for the viewed forum's view count
       setForums(prevForums =>
         prevForums.map(f =>
           f.id === forum.id ? { ...f, views: f.views + 1 } : f
         )
       );
-      setSelectedForum(prev => prev ? { ...prev, views: prev.views + 1 } : null); // Update selectedForum too
+      setSelectedForum(prev => prev ? { ...prev, views: prev.views + 1 } : null);
     } catch (err) {
       console.error("Error incrementing view count:", err);
     }
 
-    // Fetch replies and check like status after setting selectedForum
     if (user?.uid) {
       checkUserLikeStatus(forum.id, user.uid);
     }
@@ -296,13 +349,20 @@ export default function ForumsPage() {
     setSelectedForum(null);
     setForumReplies([]);
     setNewReplyText("");
-    setIsForumLikedByUser(false); // Reset like status
+    setIsForumLikedByUser(false);
+    setIsReportContentModalOpen(false); // Ensure report modal is closed
+    setReportReason("");
+    setReportItemDetails(null);
+    // Reset reported status for this modal session
+    setReportedForumIdInModal(null);
+    setReportedReplyIdsInModal(new Set());
   };
 
   // Handle adding a new reply
   const handleAddReply = async () => {
     if (!user?.uid || !userData || !selectedForum || !newReplyText.trim()) {
       console.warn("Cannot add reply: User not logged in, no forum selected, or reply text is empty.");
+      alert("Please log in to add a reply and ensure your profile is complete."); // Inform user
       return;
     }
 
@@ -312,43 +372,40 @@ export default function ForumsPage() {
       const authorImagePlaceholder = `https://placehold.co/40x40/aabbcc/ffffff?text=${initials}`;
       const authorName = userData.firstName && userData.lastName ? `${userData.firstName} ${userData.lastName}` : userData.email || 'Anonymous User';
 
-      const replyData: Omit<Reply, 'id'> = { // Use Omit to exclude 'id' when creating the object
+      const replyData: Omit<Reply, 'id'> = {
         forumId: selectedForum.id,
         authorId: user.uid,
         authorName: authorName,
-        authorImage: authorImagePlaceholder, // Use generated placeholder directly
+        authorImage: authorImagePlaceholder,
         text: newReplyText.trim(),
         createdAt: Timestamp.now(),
         upvotes: 0,
         downvotes: 0,
-        isExpert: currentUserIsExpert // Set isExpert based on current user's role
+        isExpert: currentUserIsExpert // Set if the replying user is an expert
       };
 
       await addDoc(collection(db, `forums/${selectedForum.id}/replies`), replyData);
 
-      // Increment replies count and update lastActivityAt, lastReplyText, lastReplyAuthor on the parent forum document
       const forumRef = doc(db, "forums", selectedForum.id);
-      const now = Timestamp.now(); // Get current timestamp once
+      const now = Timestamp.now();
       await updateDoc(forumRef, {
         replies: increment(1),
-        lastActivityAt: now, // Update 'last activity' timestamp on parent forum
-        lastReplyText: newReplyText.trim(), // Store the latest reply text
-        lastReplyAuthor: authorName,       // Store the latest reply author
+        lastActivityAt: now,
+        lastReplyText: newReplyText.trim(),
+        lastReplyAuthor: authorName,
       });
 
       setNewReplyText("");
-      // Optimistically update the selected forum's replies count and lastActivityAt in local state for modal view
       setSelectedForum(prev => prev ? { ...prev, replies: prev.replies + 1, lastActivityAt: now, lastReplyText: newReplyText.trim(), lastReplyAuthor: authorName } : null);
-
-      // Optimistically update the main forums list to reflect new replies count and last activity timestamp
       setForums(prevForums => prevForums.map(f =>
         f.id === selectedForum.id ? { ...f, replies: f.replies + 1, lastActivityAt: now, lastReplyText: newReplyText.trim(), lastReplyAuthor: authorName } : f
       ));
 
-      await fetchReplies(selectedForum.id); // Re-fetch replies to show the new one
+      await fetchReplies(selectedForum.id);
       console.log("Reply added successfully!");
     } catch (err) {
       console.error("Error adding reply:", err);
+      alert("Failed to add reply. Please try again.");
     } finally {
       setSubmittingReply(false);
     }
@@ -358,6 +415,7 @@ export default function ForumsPage() {
   const handleLikeUnlike = async () => {
     if (!user?.uid || !selectedForum) {
       console.warn("Cannot like/unlike: User not logged in or no forum selected.");
+      alert("Please log in to like a post.");
       return;
     }
 
@@ -366,25 +424,16 @@ export default function ForumsPage() {
       const forumRef = doc(db, "forums", selectedForum.id);
 
       if (isForumLikedByUser) {
-        // User has liked, so unlike
         await deleteDoc(likeDocRef);
-        await updateDoc(forumRef, {
-          likes: increment(-1)
-        });
+        await updateDoc(forumRef, { likes: increment(-1) });
         setIsForumLikedByUser(false);
-        // Optimistically update selected forum's likes count
         setSelectedForum(prev => prev ? { ...prev, likes: prev.likes - 1 } : null);
       } else {
-        // User has not liked, so like
         await setDoc(likeDocRef, { userId: user.uid, likedAt: Timestamp.now() });
-        await updateDoc(forumRef, {
-          likes: increment(1)
-        });
+        await updateDoc(forumRef, { likes: increment(1) });
         setIsForumLikedByUser(true);
-        // Optimistically update selected forum's likes count
         setSelectedForum(prev => prev ? { ...prev, likes: prev.likes + 1 } : null);
       }
-      // Optimistically update main forums list for likes count, instead of full fetch
       setForums(prevForums =>
         prevForums.map(f =>
           f.id === selectedForum.id
@@ -394,6 +443,7 @@ export default function ForumsPage() {
       );
     } catch (err) {
       console.error("Error liking/unliking forum:", err);
+      alert("Failed to like/unlike post. Please try again.");
     }
   };
 
@@ -401,6 +451,7 @@ export default function ForumsPage() {
   const handleReplyVote = async (replyId: string, currentVoteType: 'up' | 'down' | null, newVoteType: 'up' | 'down' | null) => {
     if (!user?.uid || !selectedForum) {
       console.warn("Cannot vote on reply: User not logged in or no forum selected.");
+      alert("Please log in to vote on replies.");
       return;
     }
 
@@ -408,7 +459,6 @@ export default function ForumsPage() {
     const voteRef = doc(db, `forums/${selectedForum.id}/replies/${replyId}/votes`, user.uid);
 
     try {
-      // Optimistically update UI
       setForumReplies(prevReplies =>
         prevReplies.map(reply => {
           if (reply.id === replyId) {
@@ -416,67 +466,51 @@ export default function ForumsPage() {
             let updatedDownvotes = reply.downvotes;
 
             if (newVoteType === 'up') {
-              if (currentVoteType === 'up') { // Un-upvote
+              if (currentVoteType === 'up') {
                 updatedUpvotes--;
-                newVoteType = null; // Set to null to remove vote
-              } else { // Upvote or change from downvote
+                newVoteType = null;
+              } else {
                 updatedUpvotes++;
                 if (currentVoteType === 'down') updatedDownvotes--;
               }
             } else if (newVoteType === 'down') {
-              if (currentVoteType === 'down') { // Un-downvote
+              if (currentVoteType === 'down') {
                 updatedDownvotes--;
-                newVoteType = null; // Set to null to remove vote
-              } else { // Downvote or change from upvote
+                newVoteType = null;
+              } else {
                 updatedDownvotes++;
                 if (currentVoteType === 'up') updatedUpvotes--;
               }
             }
-
-            return {
-              ...reply,
-              upvotes: updatedUpvotes,
-              downvotes: updatedDownvotes,
-              userVote: newVoteType,
-            };
+            return { ...reply, upvotes: updatedUpvotes, downvotes: updatedDownvotes, userVote: newVoteType };
           }
           return reply;
         })
       );
 
-
-      // Update Firestore based on vote changes
       const updatePayload: { [key: string]: any } = {};
-
       if (newVoteType === 'up') {
-        if (currentVoteType === 'up') { // User clicks upvote again (un-upvote)
+        if (currentVoteType === 'up') {
           await deleteDoc(voteRef);
           updatePayload.upvotes = increment(-1);
-        } else { // User upvotes, or changes from downvote to upvote
+        } else {
           await setDoc(voteRef, { type: 'up', userId: user.uid, votedAt: Timestamp.now() });
           updatePayload.upvotes = increment(1);
-          if (currentVoteType === 'down') {
-            updatePayload.downvotes = increment(-1);
-          }
+          if (currentVoteType === 'down') { updatePayload.downvotes = increment(-1); }
         }
       } else if (newVoteType === 'down') {
-        if (currentVoteType === 'down') { // User clicks downvote again (un-downvote)
+        if (currentVoteType === 'down') {
           await deleteDoc(voteRef);
           updatePayload.downvotes = increment(-1);
-        } else { // User downvotes, or changes from upvote to downvote
+        } else {
           await setDoc(voteRef, { type: 'down', userId: user.uid, votedAt: Timestamp.now() });
           updatePayload.downvotes = increment(1);
-          if (currentVoteType === 'up') {
-            updatePayload.upvotes = increment(-1);
-          }
+          if (currentVoteType === 'up') { updatePayload.upvotes = increment(-1); }
         }
-      } else { // New vote type is null, meaning "remove vote"
+      } else {
         await deleteDoc(voteRef);
-        if (currentVoteType === 'up') {
-          updatePayload.upvotes = increment(-1);
-        } else if (currentVoteType === 'down') {
-          updatePayload.downvotes = increment(-1);
-        }
+        if (currentVoteType === 'up') { updatePayload.upvotes = increment(-1); }
+        else if (currentVoteType === 'down') { updatePayload.downvotes = increment(-1); }
       }
 
       await updateDoc(replyRef, updatePayload);
@@ -484,6 +518,7 @@ export default function ForumsPage() {
 
     } catch (err) {
       console.error("Error voting on reply:", err);
+      alert("Failed to vote. Please try again.");
     }
   };
 
@@ -491,7 +526,7 @@ export default function ForumsPage() {
   const handleCreateNewDiscussion = async () => {
     if (!user?.uid || !userData || !newDiscussionTitle.trim() || !newDiscussionDescription.trim() || !newDiscussionCategory) {
       console.warn("Cannot create new discussion: User not logged in, or required fields are empty.");
-      // Optionally show a user-friendly error message
+      alert("Please log in and fill all required fields to create a new discussion.");
       return;
     }
 
@@ -502,42 +537,44 @@ export default function ForumsPage() {
       const authorName = userData.firstName && userData.lastName ? `${userData.firstName} ${userData.lastName}` : userData.email || 'Anonymous User';
 
       const now = Timestamp.now();
-      const newForumData: Omit<Forum, 'id'> = { // Use Omit to exclude 'id'
+      const newForumData: Omit<Forum, 'id'> = {
         title: newDiscussionTitle.trim(),
         author: authorName,
+        authorId: user.uid,
         authorImage: authorImagePlaceholder,
-        date: now, // Original post date
+        date: now,
         category: newDiscussionCategory,
-        tags: newDiscussionTags.split(',').map(tag => tag.trim()).filter(tag => tag), // Split tags string into an array
+        tags: newDiscussionTags.split(',').map(tag => tag.trim()).filter(tag => tag),
         replies: 0,
         views: 0,
         likes: 0,
         solved: false,
-        createdAt: now, // Original creation timestamp
-        lastActivityAt: now, // Initial activity is creation
-        description: newDiscussionDescription.trim(), // Save content as description
-        // lastReplyText and lastReplyAuthor will be undefined initially
+        createdAt: now,
+        lastActivityAt: now,
+        description: newDiscussionDescription.trim(),
       };
 
       const docRef = await addDoc(collection(db, "forums"), newForumData);
       console.log("New discussion created with ID:", docRef.id);
 
-      // Optimistically add the new forum to the beginning of the list
-      setForums(prevForums => [
-        { ...newForumData, id: docRef.id }, // Add the generated ID here
-        ...prevForums
-      ]);
+      // Optimistically add the new forum to the beginning of the list and re-sort
+      setForums(prevForums => {
+        const updatedList = [{ ...newForumData, id: docRef.id }, ...prevForums];
+        // Re-sort to maintain order by lastActivityAt for the displayed list
+        return updatedList.sort((a, b) => b.lastActivityAt.toMillis() - a.lastActivityAt.toMillis());
+      });
 
-      // Clear form and close modal
+
       setNewDiscussionTitle("");
-      setNewDiscussionDescription(""); // Cleared description field
-      setNewDiscussionCategory("all");
+      setNewDiscussionDescription("");
+      setNewDiscussionCategory("Other/General");
       setNewDiscussionTags("");
       setIsNewDiscussionModalOpen(false);
+      alert("Your discussion post has been created!");
 
     } catch (error) {
       console.error("Error creating new discussion:", error);
-      // Optionally show a user-friendly error message
+      alert("Failed to create new discussion. Please try again.");
     } finally {
       setSubmittingNewDiscussion(false);
     }
@@ -545,21 +582,78 @@ export default function ForumsPage() {
 
   // Function to open the New Discussion modal
   const handleOpenNewDiscussionModal = () => {
-    // Only open if user is logged in
     if (user) {
       setIsNewDiscussionModalOpen(true);
     } else {
-      console.warn("Please log in to create a new discussion.");
-      // Optionally show a prompt to log in
+      alert("Please log in to create a new discussion.");
     }
   };
 
+  // --- REPORTING FUNCTIONALITY ---
+  const handleReportContent = (itemId: string, itemTitle: string, type: 'forum' | 'reply') => {
+    if (!user) {
+      alert("Please log in to report content.");
+      return;
+    }
+    setReportItemDetails({ id: itemId, title: itemTitle, type });
+    setIsReportContentModalOpen(true);
+  };
+
+  const submitReport = async () => {
+    if (!user?.uid || !userData || !reportItemDetails || !reportReason.trim()) {
+      console.warn("Cannot submit report: Missing user, item details, or reason.");
+      alert("Please provide a reason for the report.");
+      return;
+    }
+
+    setSubmittingReport(true);
+    try {
+      const reportData: Omit<ReportedPost, 'id'> = {
+        type: reportItemDetails.type,
+        itemId: reportItemDetails.id,
+        itemTitle: reportItemDetails.title,
+        reporterId: user.uid,
+        reporterName: userData.firstName && userData.lastName ? `${userData.firstName} ${userData.lastName}` : userData.email || 'Anonymous User',
+        reason: reportReason.trim(),
+        reportedAt: Timestamp.now(),
+        status: 'pending', // Always pending initially
+      };
+
+      await addDoc(collection(db, "reportedPosts"), reportData);
+      console.log("Content reported successfully:", reportData);
+
+      // Update the local state to show "Post Reported" for the current item
+      if (reportItemDetails.type === 'forum') {
+          setReportedForumIdInModal(reportItemDetails.id);
+      } else if (reportItemDetails.type === 'reply') {
+          setReportedReplyIdsInModal(prev => new Set(prev).add(reportItemDetails.id));
+      }
+
+      setReportReason("");
+      setReportItemDetails(null);
+      setIsReportContentModalOpen(false);
+      alert("Content has been reported successfully. Thank you for your feedback!");
+    } catch (err) {
+      console.error("Error submitting report:", err);
+      alert("Failed to submit report. Please try again.");
+    } finally {
+      setSubmittingReport(false);
+    }
+  };
+
+
   useEffect(() => {
-    setForums([]);
+    setForums([]); // Clear forums on tab change
     setLastVisible(null);
     setHasMore(true);
     fetchForums(activeTab, null, false);
   }, [activeTab, fetchForums]);
+
+  // Fetch categories on component mount
+  useEffect(() => {
+    fetchCategories();
+  }, [fetchCategories]);
+
 
   useEffect(() => {
     if (selectedForum) {
@@ -567,7 +661,7 @@ export default function ForumsPage() {
       if (user?.uid) {
         checkUserLikeStatus(selectedForum.id, user.uid);
       } else {
-        setIsForumLikedByUser(false); // Ensure like status is false if user logs out while modal is open
+        setIsForumLikedByUser(false);
       }
     }
   }, [selectedForum, user?.uid, fetchReplies, checkUserLikeStatus]);
@@ -603,6 +697,15 @@ export default function ForumsPage() {
     );
   }
 
+  // Combine hardcoded and fetched categories for tabs, ensuring uniqueness and 'all' first
+  const allAvailableCategories = ["all", ...initialCategories, ...categories.map(c => c.name)]
+    .filter((value, index, self) => self.indexOf(value) === index)
+    .sort((a, b) => {
+      if (a === "all") return -1;
+      if (b === "all") return 1;
+      return a.localeCompare(b);
+    });
+
   return (
     <div className="container py-8 px-4">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
@@ -611,13 +714,12 @@ export default function ForumsPage() {
           <p className="text-muted-foreground">Ask questions, share insights, and learn from peers and experts</p>
         </div>
         <div className="flex gap-2">
-          {user && ( // Only show "New Discussion" button if user is logged in
+          {user ? ( // Only show "New Discussion" button if user is logged in
             <Button onClick={handleOpenNewDiscussionModal}>
               <MessageSquare className="mr-2 h-4 w-4" />
               New Discussion
             </Button>
-          )}
-          {!user && ( // Show disabled button or message if not logged in
+          ) : ( // Show disabled button if not logged in
             <Button disabled className="cursor-not-allowed opacity-70">
               <MessageSquare className="mr-2 h-4 w-4" />
               New Discussion (Login to post)
@@ -628,99 +730,94 @@ export default function ForumsPage() {
 
       <Tabs defaultValue="all" value={activeTab} onValueChange={handleTabChange} className="mb-8">
         <TabsList className="grid grid-cols-4 md:grid-cols-7 mb-8">
-          <TabsTrigger value="all">All Topics</TabsTrigger>
-          <TabsTrigger value="TCS">TCS</TabsTrigger>
-          <TabsTrigger value="Infosys">Infosys</TabsTrigger>
-          <TabsTrigger value="Capgemini">Capgemini</TabsTrigger>
-          <TabsTrigger value="Wipro">Wipro</TabsTrigger>
-          <TabsTrigger value="Aptitude">Aptitude</TabsTrigger>
-          <TabsTrigger value="Coding">Coding</TabsTrigger>
+          {allAvailableCategories.map(cat => (
+            <TabsTrigger key={cat} value={cat}>
+              {cat === "Other/General" ? "Other" : cat.split('/')[0]}
+            </TabsTrigger>
+          ))}
         </TabsList>
 
         <TabsContent value={activeTab} className="mt-0">
-          {!loading && !error && forums.length === 0 && (
+          {!loading && !error && forums.length === 0 ? (
             <div className="text-center text-muted-foreground py-10">
               <p>No forums found for this category.</p>
             </div>
-          )}
-
-          <div className="grid gap-4">
-            {forums.map((forum) => (
-              <Card key={forum.id} className="hover:shadow-md transition-shadow cursor-pointer" onClick={() => handleOpenForumDetail(forum)}>
-                <CardHeader className="pb-2">
-                  <div className="flex justify-between">
-                    <div className="flex items-start gap-4">
-                      <Image
-                        src={forum.authorImage || "/placeholder.svg"}
-                        alt={forum.author}
-                        width={40}
-                        height={40}
-                        className="rounded-full"
-                      />
-                      <div>
-                        <CardTitle className="text-lg">
-                          <Link href={`/forums/${forum.id}`} onClick={(e) => { e.preventDefault(); handleOpenForumDetail(forum); }} className="hover:text-primary transition-colors">
-                            {forum.title}
-                          </Link>
-                          {forum.solved && (
-                            <Badge className="ml-2 bg-green-500 text-white">
-                              Solved
-                            </Badge>
-                          )}
-                        </CardTitle>
-                        <CardDescription>
-                          Posted by <span className="font-medium">{forum.author}</span> • {formatFirestoreTimestamp(forum.date)}
-                        </CardDescription>
+          ) : (
+            <div className="grid gap-4">
+              {forums.map((forum) => (
+                <Card key={forum.id} className="hover:shadow-md transition-shadow cursor-pointer" onClick={() => handleOpenForumDetail(forum)}>
+                  <CardHeader className="pb-2">
+                    <div className="flex justify-between">
+                      <div className="flex items-start gap-4">
+                        <Image
+                          src={forum.authorImage || "/placeholder.svg"}
+                          alt={forum.author}
+                          width={40}
+                          height={40}
+                          className="rounded-full"
+                        />
+                        <div>
+                          <CardTitle className="text-lg">
+                            <Link href={`/forums/${forum.id}`} onClick={(e) => { e.preventDefault(); handleOpenForumDetail(forum); }} className="hover:text-primary transition-colors">
+                              {forum.title}
+                            </Link>
+                          </CardTitle>
+                          <CardDescription>
+                            Posted by <span className="font-medium">{forum.author}</span> • {formatFirestoreTimestamp(forum.date)}
+                          </CardDescription>
+                        </div>
                       </div>
+                      {forum.solved && (
+                        <Badge className="ml-2 bg-green-500 text-white">
+                          Solved
+                        </Badge>
+                      )}
                     </div>
-                    <Badge>{forum.category}</Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="pb-2">
-                  {/* Display main description if available */}
-                  {forum.description && (
-                    <p className="text-sm text-muted-foreground line-clamp-3 mb-3">
-                      {forum.description}
-                    </p>
-                  )}
-                  <div className="flex flex-wrap gap-2">
-                    {forum.tags.map((tag, i) => (
-                      <Badge key={i} variant="outline">
-                        {tag}
-                      </Badge>
-                    ))}
-                  </div>
-                  {/* Display Top Reply on Main Card (only if replies exist) */}
-                  {forum.lastReplyText && forum.lastReplyAuthor && forum.replies > 0 && (
-                    <div className="mt-4 pt-3 border-t border-gray-200 dark:border-gray-700 text-sm">
-                      <p className="font-semibold text-muted-foreground">Latest reply by {forum.lastReplyAuthor}:</p>
-                      <p className="text-gray-700 dark:text-gray-300 line-clamp-2">{forum.lastReplyText}</p>
+                  </CardHeader>
+                  <CardContent className="pb-2">
+                    {forum.description && (
+                      <p className="text-sm text-muted-foreground line-clamp-3 mb-3">
+                        {forum.description}
+                      </p>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      {forum.tags.map((tag, i) => (
+                        <Badge key={i} variant="outline">
+                          {tag}
+                        </Badge>
+                      ))}
                     </div>
-                  )}
-                </CardContent>
-                <CardFooter className="flex justify-between text-sm text-muted-foreground">
-                  <div className="flex gap-4">
+                    {forum.lastReplyText && forum.lastReplyAuthor && forum.replies > 0 && (
+                      <div className="mt-4 pt-3 border-t border-gray-200 dark:border-gray-700 text-sm">
+                        <p className="font-semibold text-muted-foreground">Latest reply by {forum.lastReplyAuthor}:</p>
+                        <p className="text-gray-700 dark:text-gray-300 line-clamp-2">{forum.lastReplyText}</p>
+                      </div>
+                    )}
+                  </CardContent>
+                  <CardFooter className="flex justify-between text-sm text-muted-foreground">
+                    <div className="flex gap-4">
+                      <span className="flex items-center">
+                        <MessageSquare className="mr-1 h-4 w-4" />
+                        {forum.replies} replies
+                      </span>
+                      <span className="flex items-center">
+                        <Eye className="mr-1 h-4 w-4" />
+                        {forum.views} views
+                      </span>
+                      <span className="flex items-center">
+                        <ThumbsUp className="mr-1 h-4 w-4" />
+                        {forum.likes} likes
+                      </span>
+                    </div>
                     <span className="flex items-center">
-                      <MessageSquare className="mr-1 h-4 w-4" />
-                      {forum.replies} replies
+                      <Clock className="mr-1 h-4 w-4" />
+                      Last activity: {formatFirestoreTimestamp(forum.lastActivityAt)}
                     </span>
-                    <span className="flex items-center">
-                      <Eye className="mr-1 h-4 w-4" />
-                      {forum.views} views
-                    </span>
-                    <span className="flex items-center">
-                      <ThumbsUp className="mr-1 h-4 w-4" />
-                      {forum.likes} likes
-                    </span>
-                  </div>
-                  <span className="flex items-center">
-                    <Clock className="mr-1 h-4 w-4" />
-                    Last activity: {formatFirestoreTimestamp(forum.lastActivityAt)}
-                  </span>
-                </CardFooter>
-              </Card>
-            ))}
-          </div>
+                  </CardFooter>
+                </Card>
+              ))}
+            </div>
+          )}
         </TabsContent>
       </Tabs>
 
@@ -744,13 +841,15 @@ export default function ForumsPage() {
           {selectedForum && (
             <>
               <DialogHeader>
-                <DialogTitle className="text-2xl font-bold">{selectedForum.title}</DialogTitle>
+                <DialogTitle className="text-2xl font-bold flex items-center">
+                  {selectedForum.title}
+                  {selectedForum.solved && (
+                    <Badge className="ml-3 bg-green-500 text-white text-base">Solved</Badge>
+                  )}
+                </DialogTitle>
                 <DialogDescription>
                   Posted by <span className="font-semibold">{selectedForum.author}</span> •{" "}
                   {formatFirestoreTimestamp(selectedForum.date)}
-                  {selectedForum.solved && (
-                    <Badge className="ml-2 bg-green-500 text-white">Solved</Badge>
-                  )}
                 </DialogDescription>
               </DialogHeader>
 
@@ -806,6 +905,31 @@ export default function ForumsPage() {
                 )}
               </div>
 
+              {/* Report Post Button (for main forum post) */}
+              {user && (
+                  <div className="flex justify-end mt-4">
+                      <Button
+                          variant="outline"
+                          onClick={() => handleReportContent(selectedForum.id, selectedForum.title, 'forum')}
+                          className={cn(
+                            "text-red-500 border-red-500",
+                            reportedForumIdInModal === selectedForum.id ? "bg-green-100 text-green-700 border-green-700" : "hover:text-red-600 hover:border-red-600"
+                          )}
+                          disabled={reportedForumIdInModal === selectedForum.id || submittingReport}
+                      >
+                          {reportedForumIdInModal === selectedForum.id ? (
+                              <>
+                                  <Flag className="mr-2 h-4 w-4" /> Post Reported
+                              </>
+                          ) : (
+                              <>
+                                  <Flag className="mr-2 h-4 w-4" /> Report Post
+                              </>
+                          )}
+                      </Button>
+                  </div>
+              )}
+
               {/* Replies Section */}
               <h3 className="text-xl font-semibold mb-3 mt-6">Replies ({forumReplies.length})</h3>
               <div className="space-y-4 max-h-[300px] overflow-y-auto pr-2">
@@ -813,11 +937,11 @@ export default function ForumsPage() {
                   <p className="text-muted-foreground text-sm">No replies, start the conversation!</p>
                 ) : (
                   forumReplies.map((reply) => (
-                    <div key={reply.id!} className={cn( // Fix applied here: key={reply.id!}
+                    <div key={reply.id!} className={cn(
                       "flex items-start gap-3 p-3 rounded-lg",
                       reply.isExpert
-                        ? "bg-yellow-50 dark:bg-yellow-950 border-l-4 border-yellow-500 shadow-md transition-all duration-300" // Expert styling
-                        : "bg-gray-50 dark:bg-gray-800" // Normal reply styling
+                        ? "bg-yellow-50 dark:bg-yellow-950 border-l-4 border-yellow-500 shadow-md transition-all duration-300"
+                        : "bg-gray-50 dark:bg-gray-800"
                     )}>
                       <Avatar className="h-8 w-8">
                         {reply.authorImage && reply.authorImage !== "/placeholder.svg" ? (
@@ -837,7 +961,7 @@ export default function ForumsPage() {
                       <div className="flex-1">
                         <div className="flex items-center gap-2 text-sm">
                           <span className="font-semibold">{reply.authorName}</span>
-                          {reply.isExpert && ( // Expert badge
+                          {reply.isExpert && (
                             <Badge variant="outline" className="bg-yellow-200 text-yellow-800 dark:bg-yellow-800 dark:text-yellow-200">
                               <Award className="h-3 w-3 mr-1" /> Expert Reply
                             </Badge>
@@ -851,7 +975,7 @@ export default function ForumsPage() {
                               variant="ghost"
                               size="icon"
                               className="h-6 w-6 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700"
-                              onClick={() => handleReplyVote(reply.id!, reply.userVote || null, reply.userVote === 'up' ? null : 'up')} // Fix applied here: reply.id!
+                              onClick={() => handleReplyVote(reply.id!, reply.userVote || null, reply.userVote === 'up' ? null : 'up')}
                             >
                               <ThumbsUp
                                 className={cn(
@@ -866,7 +990,7 @@ export default function ForumsPage() {
                               variant="ghost"
                               size="icon"
                               className="h-6 w-6 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 ml-2"
-                              onClick={() => handleReplyVote(reply.id!, reply.userVote || null, reply.userVote === 'down' ? null : 'down')} // Fix applied here: reply.id!
+                              onClick={() => handleReplyVote(reply.id!, reply.userVote || null, reply.userVote === 'down' ? null : 'down')}
                             >
                               <ThumbsDown
                                 className={cn(
@@ -876,6 +1000,22 @@ export default function ForumsPage() {
                               />
                             </Button>
                             <span>{reply.downvotes}</span>
+                            {/* Report Reply Button */}
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 rounded-full ml-auto"
+                                onClick={(e) => {
+                                    e.stopPropagation(); // Prevent closing main modal
+                                    handleReportContent(reply.id!, reply.text.substring(0, 50) + "...", 'reply');
+                                }}
+                                disabled={reportedReplyIdsInModal.has(reply.id!) || submittingReport}
+                            >
+                                <Flag className={cn(
+                                    "h-4 w-4 transition-colors",
+                                    reportedReplyIdsInModal.has(reply.id!) ? "text-green-500 fill-green-500" : "text-red-400 hover:text-red-600"
+                                )} />
+                            </Button>
                           </div>
                         )}
                       </div>
@@ -885,7 +1025,7 @@ export default function ForumsPage() {
               </div>
 
               {/* Add Reply Input */}
-              {user && ( // Only show reply input if user is logged in
+              {user ? (
                 <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
                   <Label htmlFor="new-reply" className="mb-2 block font-semibold">Add your reply</Label>
                   <Textarea
@@ -907,8 +1047,7 @@ export default function ForumsPage() {
                     )}
                   </Button>
                 </div>
-              )}
-              {!user && (
+              ) : (
                 <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700 text-center text-muted-foreground">
                   <p>Please log in to add a reply or like this post.</p>
                   <Link href="/login" passHref>
@@ -957,13 +1096,11 @@ export default function ForumsPage() {
                   <SelectValue placeholder="Select a category" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="TCS">TCS</SelectItem>
-                  <SelectItem value="Infosys">Infosys</SelectItem>
-                  <SelectItem value="Capgemini">Capgemini</SelectItem>
-                  <SelectItem value="Wipro">Wipro</SelectItem>
-                  <SelectItem value="Aptitude">Aptitude</SelectItem>
-                  <SelectItem value="Coding">Coding</SelectItem>
-                  <SelectItem value="all">Other/General</SelectItem>
+                  {categories.map((category) => ( // Use dynamically fetched categories
+                    <SelectItem key={category.id} value={category.name}>
+                      {category.name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -995,7 +1132,7 @@ export default function ForumsPage() {
               />
             </div>
           </div>
-          <div className="flex justify-end gap-2">
+          <DialogFooter>
             <Button variant="outline" onClick={() => setIsNewDiscussionModalOpen(false)} disabled={submittingNewDiscussion}>
               Cancel
             </Button>
@@ -1008,7 +1145,49 @@ export default function ForumsPage() {
                 "Create Post"
               )}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Report Forum/Content Modal */}
+      <Dialog open={isReportContentModalOpen} onOpenChange={setIsReportContentModalOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Report Content</DialogTitle>
+            <DialogDescription>
+              Please provide a reason for reporting this content.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            {reportItemDetails && (
+              <p className="text-sm text-muted-foreground">
+                Reporting: <span className="font-semibold">{reportItemDetails.type.toUpperCase()}</span> "{reportItemDetails.title}"
+              </p>
+            )}
+            <Label htmlFor="report-reason">Reason</Label>
+            <Textarea
+              id="report-reason"
+              placeholder="e.g., Spam, Inappropriate content, Misinformation"
+              value={reportReason}
+              onChange={(e) => setReportReason(e.target.value)}
+              rows={4}
+              disabled={submittingReport}
+            />
           </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsReportContentModalOpen(false)} disabled={submittingReport}>
+              Cancel
+            </Button>
+            <Button onClick={submitReport} disabled={submittingReport || !reportReason.trim()}>
+              {submittingReport ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Submitting...
+                </>
+              ) : (
+                "Submit Report"
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
