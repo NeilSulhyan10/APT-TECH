@@ -64,7 +64,7 @@ export default function RegisterPage() {
       return;
     }
     // Basic validation for common fields
-    if (!email || !password || !firstName || !lastName || !college || !yearOfStudy || !selectedRole) {
+    if (selectedRole === 'student' && (!email || !password || !firstName || !lastName || !college || !yearOfStudy || !selectedRole)) {
       setError("Please fill in all required fields.");
       return;
     }
