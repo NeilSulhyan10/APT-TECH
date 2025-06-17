@@ -14,12 +14,9 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox"; // Keeping rememberMe checkbox
+import { Checkbox } from "@/components/ui/checkbox";
 import Link from "next/link";
-import { Loader2 } from "lucide-react"; // For loading spinner
-import { signOut } from "firebase/auth"; // For potential cleanup on error
-// Import necessary Firebase Auth functions and your auth instance/provider
-import { auth, provider } from "@/config/firebase";
+import { Loader2, Eye, EyeOff } from "lucide-react"; // Import Eye and EyeOff
 import {
   signInWithEmailAndPassword,
   signInWithPopup,
@@ -27,6 +24,9 @@ import {
   browserSessionPersistence,
   browserLocalPersistence,
 } from "firebase/auth";
+
+// Import necessary Firebase Auth functions and your auth instance/provider
+import { auth, provider } from "@/config/firebase";
 
 // Import your AuthContext hook
 import { useAuth } from '@/app/context/authContext'; // Adjust path if different
@@ -38,6 +38,7 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false); // For email/password login button
   const [googleLoading, setGoogleLoading] = useState(false); // For Google login button
+  const [showPassword, setShowPassword] = useState(false); // New state for password visibility
 
   const router = useRouter();
 
@@ -193,13 +194,29 @@ export default function LoginPage() {
                   Forgot password?
                 </Link>
               </div>
-              <Input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
+              {/* Password Input with Eye Toggle */}
+              <div className="relative">
+                <Input
+                  id="password"
+                  type={showPassword ? "text" : "password"} // Conditional type
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  className="pr-10" // Add padding to the right for the icon
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-500 hover:text-gray-700"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? (
+                    <EyeOff className="h-5 w-5" />
+                  ) : (
+                    <Eye className="h-5 w-5" />
+                  )}
+                </button>
+              </div>
             </div>
             <div className="flex items-center space-x-2">
               <Checkbox
