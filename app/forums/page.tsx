@@ -99,7 +99,7 @@ interface Category {
   id: string;
   name: string;
   createdAt: Timestamp;
-}
+} 
 
 // New Interface for Reported Post data stored in Firestore
 interface ReportedPost {
@@ -590,7 +590,8 @@ export default function ForumsPage() {
   };
 
   // --- REPORTING FUNCTIONALITY ---
-  const handleReportContent = (itemId: string, itemTitle: string, type: 'forum' | 'reply') => {
+  // This function is now only used for reporting forums
+  const handleReportContent = (itemId: string, itemTitle: string, type: 'forum') => { // Changed type to 'forum' only
     if (!user) {
       alert("Please log in to report content.");
       return;
@@ -625,7 +626,7 @@ export default function ForumsPage() {
       // Update the local state to show "Post Reported" for the current item
       if (reportItemDetails.type === 'forum') {
           setReportedForumIdInModal(reportItemDetails.id);
-      } else if (reportItemDetails.type === 'reply') {
+      } else if (reportItemDetails.type === 'reply') { // This branch is now unreachable due to handleReportContent type change
           setReportedReplyIdsInModal(prev => new Set(prev).add(reportItemDetails.id));
       }
 
@@ -855,7 +856,7 @@ export default function ForumsPage() {
 
               {/* Forum Details: Display description */}
               {selectedForum.description && (
-                <div className="my-4">
+                <div className="my-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-md">
                   <p className="text-base text-gray-800 dark:text-gray-200">
                     {selectedForum.description}
                   </p>
@@ -883,7 +884,7 @@ export default function ForumsPage() {
                   {selectedForum.likes}
                 </span>
 
-                {user && ( // Only show like button if user is logged in
+                {user && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -905,62 +906,49 @@ export default function ForumsPage() {
                 )}
               </div>
 
-              {/* Report Post Button (for main forum post) */}
-              {user && (
-                  <div className="flex justify-end mt-4">
-                      <Button
-                          variant="outline"
-                          onClick={() => handleReportContent(selectedForum.id, selectedForum.title, 'forum')}
-                          className={cn(
-                            "text-red-500 border-red-500",
-                            reportedForumIdInModal === selectedForum.id ? "bg-green-100 text-green-700 border-green-700" : "hover:text-red-600 hover:border-red-600"
-                          )}
-                          disabled={reportedForumIdInModal === selectedForum.id || submittingReport}
-                      >
-                          {reportedForumIdInModal === selectedForum.id ? (
-                              <>
-                                  <Flag className="mr-2 h-4 w-4" /> Post Reported
-                              </>
-                          ) : (
-                              <>
-                                  <Flag className="mr-2 h-4 w-4" /> Report Post
-                              </>
-                          )}
-                      </Button>
-                  </div>
-              )}
+              <div className="flex gap-3 mt-4 justify-end">
+                {user && (
+                    <Button
+                        variant="outline"
+                        onClick={() => handleReportContent(selectedForum.id, selectedForum.title, 'forum')}
+                        className="text-red-500 hover:text-red-600 border-red-500 hover:border-red-600"
+                    >
+                        <Flag className="mr-2 h-4 w-4" /> Report Post
+                    </Button>
+                )}
+              </div>
 
               {/* Replies Section */}
               <h3 className="text-xl font-semibold mb-3 mt-6">Replies ({forumReplies.length})</h3>
               <div className="space-y-4 max-h-[300px] overflow-y-auto pr-2">
                 {forumReplies.length === 0 ? (
-                  <p className="text-muted-foreground text-sm">No replies, start the conversation!</p>
+                  <p className="text-muted-foreground text-sm p-4 rounded-md bg-gray-50 dark:bg-gray-800">No replies, start the conversation!</p>
                 ) : (
                   forumReplies.map((reply) => (
                     <div key={reply.id!} className={cn(
-                      "flex items-start gap-3 p-3 rounded-lg",
+                      "flex items-start gap-3 p-4 rounded-lg",
                       reply.isExpert
                         ? "bg-yellow-50 dark:bg-yellow-950 border-l-4 border-yellow-500 shadow-md transition-all duration-300"
                         : "bg-gray-50 dark:bg-gray-800"
                     )}>
-                      <Avatar className="h-8 w-8">
+                      <Avatar className="h-9 w-9">
                         {reply.authorImage && reply.authorImage !== "/placeholder.svg" ? (
                           <Image
                             src={reply.authorImage}
                             alt={reply.authorName}
-                            width={32}
-                            height={32}
+                            width={36}
+                            height={36}
                             className="rounded-full"
                           />
                         ) : (
                           <AvatarFallback>
-                            {reply.authorName ? reply.authorName.split(' ').map(n => n[0]).join('').toUpperCase() : <UserIcon className="h-4 w-4" />}
+                            {reply.authorName ? reply.authorName.split(' ').map(n => n[0]).join('').toUpperCase() : <UserIcon className="h-5 w-5" />}
                           </AvatarFallback>
                         )}
                       </Avatar>
                       <div className="flex-1">
                         <div className="flex items-center gap-2 text-sm">
-                          <span className="font-semibold">{reply.authorName}</span>
+                          <span className="font-semibold text-gray-900 dark:text-gray-100">{reply.authorName}</span>
                           {reply.isExpert && (
                             <Badge variant="outline" className="bg-yellow-200 text-yellow-800 dark:bg-yellow-800 dark:text-yellow-200">
                               <Award className="h-3 w-3 mr-1" /> Expert Reply
@@ -968,13 +956,13 @@ export default function ForumsPage() {
                           )}
                           <span className="text-muted-foreground">• {formatFirestoreTimestamp(reply.createdAt)}</span>
                         </div>
-                        <p className="text-sm mt-1">{reply.text}</p>
+                        <p className="text-base mt-1 text-gray-700 dark:text-gray-300">{reply.text}</p>
                         {user && (
                           <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
                             <Button
                               variant="ghost"
                               size="icon"
-                              className="h-6 w-6 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700"
+                              className="h-7 w-7 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700"
                               onClick={() => handleReplyVote(reply.id!, reply.userVote || null, reply.userVote === 'up' ? null : 'up')}
                             >
                               <ThumbsUp
@@ -984,12 +972,12 @@ export default function ForumsPage() {
                                 )}
                               />
                             </Button>
-                            <span>{reply.upvotes}</span>
+                            <span className="text-sm">{reply.upvotes}</span>
 
                             <Button
                               variant="ghost"
                               size="icon"
-                              className="h-6 w-6 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 ml-2"
+                              className="h-7 w-7 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 ml-2"
                               onClick={() => handleReplyVote(reply.id!, reply.userVote || null, reply.userVote === 'down' ? null : 'down')}
                             >
                               <ThumbsDown
@@ -999,23 +987,8 @@ export default function ForumsPage() {
                                 )}
                               />
                             </Button>
-                            <span>{reply.downvotes}</span>
-                            {/* Report Reply Button */}
-                            <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6 rounded-full ml-auto"
-                                onClick={(e) => {
-                                    e.stopPropagation(); // Prevent closing main modal
-                                    handleReportContent(reply.id!, reply.text.substring(0, 50) + "...", 'reply');
-                                }}
-                                disabled={reportedReplyIdsInModal.has(reply.id!) || submittingReport}
-                            >
-                                <Flag className={cn(
-                                    "h-4 w-4 transition-colors",
-                                    reportedReplyIdsInModal.has(reply.id!) ? "text-green-500 fill-green-500" : "text-red-400 hover:text-red-600"
-                                )} />
-                            </Button>
+                            <span className="text-sm">{reply.downvotes}</span>
+                            {/* Removed the button to report replies as requested */}
                           </div>
                         )}
                       </div>
@@ -1025,7 +998,7 @@ export default function ForumsPage() {
               </div>
 
               {/* Add Reply Input */}
-              {user ? (
+              {user && (
                 <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
                   <Label htmlFor="new-reply" className="mb-2 block font-semibold">Add your reply</Label>
                   <Textarea
@@ -1047,7 +1020,8 @@ export default function ForumsPage() {
                     )}
                   </Button>
                 </div>
-              ) : (
+              )}
+              {!user && (
                 <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700 text-center text-muted-foreground">
                   <p>Please log in to add a reply or like this post.</p>
                   <Link href="/login" passHref>
@@ -1062,10 +1036,10 @@ export default function ForumsPage() {
 
       {/* New Discussion Modal */}
       <Dialog open={isNewDiscussionModalOpen} onOpenChange={setIsNewDiscussionModalOpen}>
-        <DialogContent className="sm:max-w-[600px]">
+        <DialogContent className="sm:max-w-[600px] p-6">
           <DialogHeader>
             <DialogTitle className="text-2xl font-bold">Start a New Discussion</DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="mt-1">
               Create a new forum post to ask a question or share insights.
             </DialogDescription>
           </DialogHeader>
@@ -1096,7 +1070,7 @@ export default function ForumsPage() {
                   <SelectValue placeholder="Select a category" />
                 </SelectTrigger>
                 <SelectContent>
-                  {categories.map((category) => ( // Use dynamically fetched categories
+                  {categories.map((category) => (
                     <SelectItem key={category.id} value={category.name}>
                       {category.name}
                     </SelectItem>
@@ -1149,12 +1123,12 @@ export default function ForumsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Report Forum/Content Modal */}
+      {/* Report Content Modal */}
       <Dialog open={isReportContentModalOpen} onOpenChange={setIsReportContentModalOpen}>
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent className="sm:max-w-[425px] p-6">
           <DialogHeader>
             <DialogTitle>Report Content</DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="mt-1">
               Please provide a reason for reporting this content.
             </DialogDescription>
           </DialogHeader>
