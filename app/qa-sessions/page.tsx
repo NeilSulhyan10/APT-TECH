@@ -102,6 +102,7 @@ export default function QASessionsPage() {
     console.log(`  Parsed sessionDateTime: ${sessionDateTime.toLocaleString()}`); // Shows the full parsed date/time object
     console.log(`  Current Date/Time (now): ${now.toLocaleString()}`); // Shows your current machine's date/time
     console.log(`  Is Upcoming (sessionDateTime > now): ${sessionDateTime > now}`);
+    console.log(session.registrationLink);
     console.log(`-----------------------------------------`);
 
     return sessionDateTime > now;
