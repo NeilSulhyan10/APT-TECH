@@ -1,6 +1,10 @@
+// app/layout.tsx
+"use client"; // <--- This directive makes the component a client component
+
 import type React from "react";
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
+import { usePathname } from "next/navigation"; // <--- Added this import
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import Navbar from "@/components/navbar";
@@ -14,27 +18,21 @@ import { AuthProvider } from "./context/authContext";
 
 const inter = Inter({ subsets: ["latin"] });
 
-export const metadata: Metadata = {
-  title: "APT-TECH Connect | Student-Expert Engagement Platform",
-  description:
-    "Connect with industry professionals, resolve doubts, and build your career with APT-TECH experts",
-  manifest: "/manifest.json",
-  generator: "v0.dev",
-};
+// Removed export const metadata and export const viewport from this client component.
+// Metadata and Viewport exports are only allowed in server components in Next.js App Router.
+// If you need global metadata, define it in a separate server layout or a top-level layout.ts file.
 
-// Move viewport and themeColor to generateViewport
-export const viewport: Viewport = {
-  themeColor: "#3b82f6",
-  width: "device-width",
-  initialScale: 1,
-  maximumScale: 1,
-};
 
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const pathname = usePathname(); // <--- Get the current path
+
+  // Define routes where the footer should be hidden
+  const hideFooterRoutes = ['/chat']; // Add '/chat' to hide footer on chat page
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
@@ -48,7 +46,8 @@ export default function RootLayout({
             <div className="flex flex-col min-h-screen">
               <Navbar />
               <main className="flex-1">{children}</main>
-              <Footer />
+              {/* Conditionally render the Footer */}
+              {!hideFooterRoutes.includes(pathname) && <Footer />} {/* <--- Modified line */}
               <Chatbot />
               <PWAInstaller />
               <OfflineBanner />

@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
 import { Button } from "@/components/ui/button";
-import { User, BookOpen, CircleUser, Loader2 } from "lucide-react";
+import { User, BookOpen, CircleUser, Loader2, MessageSquare } from "lucide-react"; // Import MessageSquare
 import { ModeToggle } from "./mode-toggle";
 import Image from "next/image";
 import MobileNav from "./mobile-nav";
@@ -35,7 +35,6 @@ export default function Navbar() {
     { href: "/admin/manage-admins", label: "Manage Admin" },
     { href: "/admin/manage-experts", label: "Manage Experts" },
     { href: "/admin/manage-students", label: "Manage Students" },
-    
   ];
 
   const expertRoutes = [
@@ -44,8 +43,6 @@ export default function Navbar() {
     { href: "/forums", label: "Forum" },
     { href: "/experts/q&a", label: "Q&A" },
     { href: "/experts", label: "Experts" },
- // Using '&' in path as per request
-     // Using '&' in path as per request
   ];
 
   // Select the appropriate routes based on the user's role
@@ -97,6 +94,15 @@ export default function Navbar() {
 
         <div className="flex items-center gap-2">
           <ModeToggle />
+          {/* Chat Option - Visible only when authenticated */}
+          {isAuthenticated && !authLoading && (
+            <Link href="/chat" passHref>
+              <Button variant="ghost" size="icon" aria-label="Chat" className="text-muted-foreground hover:text-primary">
+                <MessageSquare className="h-5 w-5" />
+              </Button>
+            </Link>
+          )}
+
           {/* Conditional rendering for user profile/login/register buttons */}
           {authLoading ? (
             <Loader2 className="h-6 w-6 animate-spin text-gray-500" />
