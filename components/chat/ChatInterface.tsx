@@ -45,6 +45,7 @@ export default function ChatInterface({
   // messagesEndRef is now used again for auto-scrolling
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+
   // Effect to fetch and listen for messages in real-time
   useEffect(() => {
     if (!conversationId || !currentUserId) {

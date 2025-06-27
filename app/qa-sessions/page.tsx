@@ -1,9 +1,22 @@
 // app/qa-sessions/page.tsx
-"use client"; // This is a client component
+"use client";
 
 import { useState, useEffect } from "react";
-import { db } from "@/app/firebase/firebaseClient"; // Import your Firestore db instance
-import { collection, query, orderBy, getDocs } from "firebase/firestore"; // Import Firestore functions
+// Import your Firestore db instance, and necessary functions
+import { db } from "@/app/firebase/firebaseClient";
+import {
+  collection,
+  query,
+  orderBy,
+  getDocs,
+  doc, // Import doc
+  updateDoc, // Import updateDoc
+  setDoc, // Import setDoc
+  getDoc, // Import getDoc
+  Timestamp, // Import Timestamp
+} from "firebase/firestore";
+
+import { useAuth } from '@/app/context/authContext'; // Import your AuthContext
 
 import {
   Card,
@@ -16,12 +29,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Calendar, Clock, Users, Bell, Filter, Search } from "lucide-react";
+import { Calendar, Clock, Users, Bell, Filter, Search, Loader2 } from "lucide-react"; // Added Loader2
 import { Input } from "@/components/ui/input";
 import Link from "next/link";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { toast } from 'sonner'; // Assuming you use a toast notification library like Sonner
 
-// Import DropdownMenu components for the filter UI
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -31,33 +44,37 @@ import {
   DropdownMenuCheckboxItem,
 } from "@/components/ui/dropdown-menu";
 
-// Define the interface for your Q&A Session data
 interface QASession {
-  id: string; // Firestore document IDs are strings
+  id: string;
   title: string;
   trainer: string;
-  // Assume date is in a format parsable by new Date() (e.g., "YYYY-MM-DD", "Month Day, Year")
   date: string;
-  // Assume time is in a format like "HH:MM AM/PM - HH:MM AM/PM"
   time: string;
-  attendees: number;
+  attendees: number; // This will now represent the count from the 'registrations' subcollection
   tags: string[];
   initials: string;
-  color: string; // e.g., "blue", "green", "purple"
+  color: string;
   description: string;
-  registrationLink?: string; // Optional, for upcoming sessions
-  recordingLink?: string; // Optional, for past sessions
+  registrationLink?: string;
+  recordingLink?: string;
+  // New field to track if the current user is registered for this session
+  isRegistered?: boolean;
 }
 
 export default function QASessionsPage() {
+  const { user, isAuthenticated, userData } = useAuth(); // Get user and authentication state
   const [sessions, setSessions] = useState<QASession[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState(""); // State for search input
-
-  // New states for filter UI
+  const [searchTerm, setSearchTerm] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [allTags, setAllTags] = useState<string[]>([]);
+  const [registeringSessionId, setRegisteringSessionId] = useState<string | null>(null); // To track which session is being registered
+
+  const currentUserId = user?.uid;
+  const currentUserName = userData?.firstName && userData?.lastName
+    ? `${userData.firstName} ${userData.lastName}`
+    : userData?.firstName || userData?.email || 'Guest';
 
   useEffect(() => {
     const fetchQASessions = async () => {
@@ -67,17 +84,39 @@ export default function QASessionsPage() {
         const q = query(qaSessionsCollection, orderBy("date", "desc"));
         const querySnapshot = await getDocs(q);
 
-        const sessionsList = querySnapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        })) as QASession[];
+        const sessionsList: QASession[] = [];
+        const uniqueTags = new Set<string>();
 
-        console.log("Fetched Sessions from Firestore (Raw Data):", sessionsList);
+        for (const docSnapshot of querySnapshot.docs) {
+          const sessionData = docSnapshot.data() as Omit<QASession, 'id' | 'attendees' | 'isRegistered'>;
+          
+          // Fetch registrations subcollection count
+          const registrationsRef = collection(db, `qASessions/${docSnapshot.id}/registrations`);
+          const registrationsSnapshot = await getDocs(registrationsRef);
+          const attendeesCount = registrationsSnapshot.size;
+
+          // Check if current user is registered
+          let isRegistered = false;
+          if (isAuthenticated && currentUserId) {
+            const userRegistrationDoc = await getDoc(doc(registrationsRef, currentUserId));
+            isRegistered = userRegistrationDoc.exists();
+          }
+
+          sessionsList.push({
+            id: docSnapshot.id,
+            ...sessionData,
+            attendees: attendeesCount,
+            isRegistered: isRegistered,
+          });
+
+          // Collect all tags
+          sessionData.tags.forEach(tag => uniqueTags.add(tag));
+        }
+
+        console.log("Fetched Sessions from Firestore (Processed Data):", sessionsList);
         setSessions(sessionsList);
+        setAllTags(Array.from(uniqueTags).sort());
 
-        // Extract and set all unique tags from the fetched sessions
-        const uniqueTags = Array.from(new Set(sessionsList.flatMap((session) => session.tags)));
-        setAllTags(uniqueTags.sort()); // Sort tags alphabetically for display
       } catch (err) {
         console.error("Error fetching Q&A sessions:", err);
         setError("Failed to load Q&A sessions. Please try again later.");
@@ -87,28 +126,88 @@ export default function QASessionsPage() {
     };
 
     fetchQASessions();
-  }, []); // Empty dependency array means this runs once on mount
+  }, [isAuthenticated, currentUserId]); // Rerun if auth state changes
 
-  // Helper function to dynamically determine if a session is upcoming
   const isSessionUpcoming = (session: QASession) => {
-    const startTimePart = session.time.split(" - ")[0]; // Extracts "4:00 PM"
+    // Robust date parsing (consider using a library like date-fns or moment.js for more complex cases)
+    // Assuming session.date is "YYYY-MM-DD" and session.time is "HH:MM AM/PM - HH:MM AM/PM"
+    const startTimePart = session.time.split(" - ")[0]; 
     const sessionDateTime = new Date(`${session.date} ${startTimePart}`);
     const now = new Date();
-
-    console.log(`--- Debugging Session: ${session.title} ---`);
-    console.log(`  session.date (raw): ${session.date}`);
-    console.log(`  session.time (raw): ${session.time}`);
-    console.log(`  Extracted Start Time Part: ${startTimePart}`);
-    console.log(`  Parsed sessionDateTime: ${sessionDateTime.toLocaleString()}`); // Shows the full parsed date/time object
-    console.log(`  Current Date/Time (now): ${now.toLocaleString()}`); // Shows your current machine's date/time
-    console.log(`  Is Upcoming (sessionDateTime > now): ${sessionDateTime > now}`);
-    console.log(session.registrationLink);
-    console.log(`-----------------------------------------`);
 
     return sessionDateTime > now;
   };
 
-  // Filter sessions based on search term AND selected tags
+  const handleRegister = async (session: QASession) => {
+    if (!isAuthenticated || !currentUserId) {
+      toast.error("Please log in to register for a session.");
+      return;
+    }
+    if (session.isRegistered) {
+      toast.info("You are already registered for this session.");
+      return;
+    }
+    if (registeringSessionId === session.id) {
+        // Already trying to register for this session
+        return;
+    }
+
+    setRegisteringSessionId(session.id); // Set the session being registered
+
+    try {
+      const registrationDocRef = doc(db, `qASessions/${session.id}/registrations/${currentUserId}`);
+      const sessionDocRef = doc(db, 'qASessions', session.id);
+
+      // Check one last time if already registered to prevent race conditions
+      const existingRegistration = await getDoc(registrationDocRef);
+      if (existingRegistration.exists()) {
+        toast.info("You are already registered for this session.");
+        setRegisteringSessionId(null);
+        // Optionally, update the local state to reflect this if it wasn't caught earlier
+        setSessions(prevSessions => prevSessions.map(s => 
+            s.id === session.id ? { ...s, isRegistered: true } : s
+        ));
+        return;
+      }
+
+      await setDoc(registrationDocRef, {
+        registeredAt: Timestamp.now(),
+        userId: currentUserId,
+        userName: currentUserName,
+        userEmail: userData?.email || 'N/A', // Add user's email if available
+      });
+
+      // Atomically increment the attendees count in the main session document (optional but good for denormalization)
+      // NOTE: This requires 'attendees' field to exist and be a number in your qASession document initially.
+      // If you are relying solely on the subcollection count, you can remove this update.
+      // For simplicity, let's just rely on the subcollection size for display.
+      // If you want to store a direct `attendees` count on the main document, you'd fetch, increment, and update it.
+      // E.g., await updateDoc(sessionDocRef, { attendees: increment(1) }); (requires FieldValue.increment)
+
+      // Update the local state to reflect the registration
+      setSessions(prevSessions =>
+        prevSessions.map(s =>
+          s.id === session.id
+            ? { ...s, attendees: s.attendees + 1, isRegistered: true }
+            : s
+        )
+      );
+
+      toast.success(`Successfully registered for "${session.title}"!`);
+
+      // If there's an external registration link, open it after successful Firestore registration
+      if (session.registrationLink) {
+        window.open(session.registrationLink, '_blank');
+      }
+
+    } catch (err) {
+      console.error("Error registering for session:", err);
+      toast.error("Failed to register. Please try again.");
+    } finally {
+      setRegisteringSessionId(null); // Clear the registering state
+    }
+  };
+
   const filteredSessions = sessions.filter((session) => {
     const matchesSearch =
       session.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -116,8 +215,6 @@ export default function QASessionsPage() {
       session.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
       session.tags.some((tag) => tag.toLowerCase().includes(searchTerm.toLowerCase()));
 
-    // If no tags are selected, all sessions match this filter.
-    // Otherwise, session must have at least one of the selected tags.
     const matchesTags =
       selectedTags.length === 0 ||
       session.tags.some((tag) => selectedTags.includes(tag));
@@ -125,17 +222,14 @@ export default function QASessionsPage() {
     return matchesSearch && matchesTags;
   });
 
-  // Then dynamically categorize them into upcoming and past
   const upcomingSessions = filteredSessions.filter(isSessionUpcoming);
   const pastSessions = filteredSessions.filter((session) => !isSessionUpcoming(session));
-
-  console.log("Upcoming Sessions for Display (Final):", upcomingSessions);
-  console.log("Past Sessions for Display (Final):", pastSessions);
 
   if (loading) {
     return (
       <div className="container py-8 px-4 text-center">
-        <p>Loading Q&A sessions...</p>
+        <Loader2 className="h-8 w-8 animate-spin mx-auto text-primary mb-4" />
+        <p className="text-lg text-muted-foreground">Loading Q&A sessions...</p>
       </div>
     );
   }
@@ -169,7 +263,6 @@ export default function QASessionsPage() {
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
-          {/* Filter Button with Dropdown Menu */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline">
@@ -181,11 +274,10 @@ export default function QASessionsPage() {
             <DropdownMenuContent className="w-56">
               <DropdownMenuLabel>Filter by Tag</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              {/* Option to clear all tag filters */}
               <DropdownMenuCheckboxItem
                 checked={selectedTags.length === 0}
                 onCheckedChange={(checked) => {
-                  if (checked) setSelectedTags([]); // If 'All Tags' is checked, clear all other selections
+                  if (checked) setSelectedTags([]);
                 }}
               >
                 All Tags
@@ -257,7 +349,7 @@ export default function QASessionsPage() {
                       </div>
                       <div className="flex items-center gap-2 text-sm text-muted-foreground">
                         <Users className="h-4 w-4" />
-                        <span>{session.attendees} attending</span>
+                        <span>{session.attendees} attending</span> {/* Display updated count */}
                       </div>
                       <div className="flex flex-wrap gap-2 mt-4">
                         {session.tags.map((tag, i) => (
@@ -275,15 +367,22 @@ export default function QASessionsPage() {
                         Remind Me
                       </Link>
                     </Button>
-                    {session.registrationLink ? (
-                      <Button size="sm" asChild>
-                        <Link href={session.registrationLink}>Register Now</Link>
-                      </Button>
-                    ) : (
-                      <Button size="sm" disabled>
-                        Register Now
-                      </Button>
-                    )}
+                    {/* Modified Register Button */}
+                    <Button
+                      size="sm"
+                      onClick={() => handleRegister(session)}
+                      disabled={!isAuthenticated || session.isRegistered || registeringSessionId === session.id} // Disable if not logged in, already registered, or currently registering this session
+                    >
+                        {registeringSessionId === session.id ? (
+                            <>
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Registering...
+                            </>
+                        ) : session.isRegistered ? (
+                            "Registered"
+                        ) : (
+                            "Register Now"
+                        )}
+                    </Button>
                   </CardFooter>
                 </Card>
               ))
