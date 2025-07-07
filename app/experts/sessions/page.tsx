@@ -1,14 +1,32 @@
 // app/experts/sessions/page.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react"; // Added useCallback
 import { useRouter } from "next/navigation";
 import { useAuth, UserData } from "@/app/context/authContext";
 import { db } from "@/config/firebase";
-import { collection, query, where, orderBy, getDocs, addDoc, Timestamp, doc, getDoc } from "firebase/firestore";
-import { Calendar as CalendarIcon, PlusCircle, Clock, Users, ArrowLeft, Loader2 } from "lucide-react";
+import {
+  collection,
+  query,
+  where,
+  orderBy,
+  getDocs,
+  addDoc,
+  Timestamp,
+  doc,
+  getDoc,
+  updateDoc,
+  deleteDoc,
+  writeBatch,
+  limit, // Import limit for pagination
+  startAfter, // Import startAfter for pagination
+  DocumentData, // Import DocumentData for QueryDocumentSnapshot
+  QueryDocumentSnapshot, // Import QueryDocumentSnapshot for lastVisible
+} from "firebase/firestore";
+import { Calendar as CalendarIcon, PlusCircle, Clock, Users, ArrowLeft, Loader2, Pencil, Trash2, ClipboardCopy, List } from "lucide-react";
 import Link from "next/link";
 import { format } from "date-fns";
+import { toast } from 'sonner';
 
 import {
   Card,
@@ -27,6 +45,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -35,7 +54,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"; // Import Select components
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 // Define interfaces for data structures
 interface QASession {
@@ -72,6 +91,16 @@ interface ExpertPersonalProfile {
   tags?: string[];
 }
 
+interface Registration {
+  id: string; // User ID who registered
+  registeredAt: any; // Firestore Timestamp
+  userId: string;
+  userName: string;
+  userEmail: string;
+}
+
+const ITEMS_PER_PAGE = 6; // Define how many sessions to load per page
+
 
 export default function ExpertSessionsPage() {
   const { user, userData, loading: authLoading, isAuthenticated } = useAuth();
@@ -83,10 +112,23 @@ export default function ExpertSessionsPage() {
   const [expertSessions, setExpertSessions] = useState<QASession[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isCreateSessionModalOpen, setIsCreateSessionModalOpen] = useState(false);
-  const [submittingSession, setSubmittingSession] = useState(false);
 
-  // States for new session form
+  // Pagination states
+  const [lastVisible, setLastVisible] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+
+  // Modals
+  const [isCreateEditSessionModalOpen, setIsCreateEditSessionModalOpen] = useState(false);
+  const [isConfirmDeleteModalOpen, setIsConfirmDeleteModalOpen] = useState(false);
+  const [isViewRegistrationsModalOpen, setIsViewRegistrationsModalOpen] = useState(false);
+
+
+  const [submittingSession, setSubmittingSession] = useState(false); // For create/edit
+  const [submittingDelete, setSubmittingDelete] = useState(false); // For delete
+  const [loadingRegistrations, setLoadingRegistrations] = useState(false);
+
+  // States for new/edit session form
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null); // Null for create, ID for edit
   const [newSessionTitle, setNewSessionTitle] = useState("");
   const [newSessionDate, setNewSessionDate] = useState<Date | undefined>(undefined);
   const [newSessionStartHour, setNewSessionStartHour] = useState<string>('');
@@ -95,13 +137,105 @@ export default function ExpertSessionsPage() {
   const [newSessionEndHour, setNewSessionEndHour] = useState<string>('');
   const [newSessionEndMinute, setNewSessionEndMinute] = useState<string>('');
   const [newSessionEndAmPm, setNewSessionEndAmPm] = useState<"AM" | "PM">('PM');
-
   const [newSessionDescription, setNewSessionDescription] = useState("");
   const [newSessionTags, setNewSessionTags] = useState(""); // Comma-separated
   const [newSessionRegistrationLink, setNewSessionRegistrationLink] = useState("");
 
   const [expertPersonalData, setExpertPersonalData] = useState<ExpertPersonalProfile | null>(null);
+  const [selectedSessionRegistrations, setSelectedSessionRegistrations] = useState<Registration[]>([]);
+  const [sessionToDelete, setSessionToDelete] = useState<QASession | null>(null); // To store session being deleted
 
+  // Function to fetch expert data and sessions (now with pagination)
+  const fetchExpertDataAndSessions = useCallback(async (lastDoc: QueryDocumentSnapshot<DocumentData> | null, append: boolean = false) => {
+    setPageLoading(true);
+    setError(null);
+    try {
+      const expertUid = user?.uid;
+      if (!expertUid) {
+        setError("Expert UID not found. Cannot fetch sessions.");
+        setPageLoading(false);
+        return;
+      }
+
+      let fetchedExpertProfile: ExpertPersonalProfile | null = null;
+      try {
+        const expertDocRef = doc(db, "experts", expertUid);
+        const expertDocSnap = await getDoc(expertDocRef);
+
+        if (expertDocSnap.exists()) {
+          fetchedExpertProfile = expertDocSnap.data() as ExpertPersonalProfile;
+          setExpertPersonalData(fetchedExpertProfile);
+        } else {
+          console.warn("Expert profile not found in 'experts' collection for UID:", expertUid);
+          setError("Your detailed expert profile is incomplete. Please contact support to set up your expert profile.");
+          setPageLoading(false);
+          return;
+        }
+      } catch (profileError: any) {
+        console.error("Error fetching expert personal profile:", profileError);
+        setError(`Failed to load expert profile: ${profileError.message || "Unknown error."}`);
+        setPageLoading(false);
+        return;
+      }
+
+      try {
+        let qaSessionsRef = collection(db, "qASessions");
+        let q = query(
+          qaSessionsRef,
+          where("expertId", "==", expertUid),
+          orderBy("createdAt", "desc")
+        );
+
+        if (lastDoc) {
+          q = query(q, startAfter(lastDoc));
+        }
+
+        q = query(q, limit(ITEMS_PER_PAGE)); // Apply limit for pagination
+
+        const querySnapshot = await getDocs(q);
+
+        const sessionsList: QASession[] = await Promise.all(querySnapshot.docs.map(async (docSnap) => {
+          const data = docSnap.data();
+          const sessionDate = data.date instanceof Timestamp ? format(data.date.toDate(), 'MMM dd,yyyy') : data.date;
+
+          // Dynamically get the count of registered students from the subcollection
+          const registrationsSnapshot = await getDocs(collection(db, `qASessions/${docSnap.id}/registrations`));
+          const registeredStudentsCount = registrationsSnapshot.size;
+
+          console.log(`Fetching registrations for session ${docSnap.id}: ${registeredStudentsCount} students.`);
+
+          return {
+            id: docSnap.id,
+            ...data,
+            date: sessionDate,
+            attendees: registeredStudentsCount,
+          } as QASession;
+        }));
+
+        setExpertSessions((prevSessions) => (append ? [...prevSessions, ...sessionsList] : sessionsList));
+        setLastVisible(querySnapshot.docs[querySnapshot.docs.length - 1] || null);
+        setHasMore(sessionsList.length === ITEMS_PER_PAGE);
+
+      } catch (sessionsError: any) {
+          console.error("Error fetching Q&A sessions:", sessionsError);
+          if (sessionsError.code === 'failed-precondition' && sessionsError.message.includes("The query requires an index.")) {
+              setError(`Failed to load your Q&A sessions: A Firestore index is missing. Check your browser console for a link to create it.`);
+          } else {
+              setError(`Failed to load your Q&A sessions: ${sessionsError.message || "Unknown error."} Please check your Firestore rules and data.`);
+          }
+          setPageLoading(false);
+          return;
+      }
+
+    } catch (overallError: any) {
+      console.error("Overall error during data fetching:", overallError);
+      setError(`An unexpected error occurred during data fetching: ${overallError.message || "Unknown error."} Please try again.`);
+    } finally {
+      setPageLoading(false);
+    }
+  }, [user?.uid, userData]); // Added user?.uid and userData to dependencies
+
+  // Initial fetch on component mount and auth state changes
   useEffect(() => {
     if (!authLoading) {
       if (!isAuthenticated) {
@@ -117,95 +251,66 @@ export default function ExpertSessionsPage() {
           setPageLoading(false);
           return;
       }
-
-      const fetchExpertDataAndSessions = async () => {
-        setPageLoading(true);
-        setError(null);
-        try {
-          const expertUid = user?.uid;
-          if (!expertUid) {
-            setError("Expert UID not found. Cannot fetch sessions.");
-            setPageLoading(false);
-            return;
-          }
-
-          let fetchedExpertProfile: ExpertPersonalProfile | null = null;
-          try {
-            const expertDocRef = doc(db, "experts", expertUid);
-            const expertDocSnap = await getDoc(expertDocRef);
-
-            if (expertDocSnap.exists()) {
-              fetchedExpertProfile = expertDocSnap.data() as ExpertPersonalProfile;
-              setExpertPersonalData(fetchedExpertProfile);
-            } else {
-              console.warn("Expert profile not found in 'experts' collection for UID:", expertUid);
-              setError("Your detailed expert profile is incomplete. Please contact support to set up your expert profile.");
-              setPageLoading(false);
-              return;
-            }
-          } catch (profileError: any) {
-            console.error("Error fetching expert personal profile:", profileError);
-            setError(`Failed to load expert profile: ${profileError.message || "Unknown error."}`);
-            setPageLoading(false);
-            return;
-          }
-
-          try {
-            const qaSessionsRef = collection(db, "qASessions");
-            const q = query(
-              qaSessionsRef,
-              where("expertId", "==", expertUid),
-              orderBy("createdAt", "desc")
-            );
-            const querySnapshot = await getDocs(q);
-
-            const sessionsList: QASession[] = querySnapshot.docs.map((doc) => {
-              const data = doc.data();
-              const sessionDate = data.date instanceof Timestamp ? format(data.date.toDate(), 'MMM dd,yyyy') : data.date;
-
-              return {
-                id: doc.id,
-                ...data,
-                date: sessionDate,
-              } as QASession;
-            });
-
-            setExpertSessions(sessionsList);
-          } catch (sessionsError: any) {
-              console.error("Error fetching Q&A sessions:", sessionsError);
-              if (sessionsError.code === 'failed-precondition' && sessionsError.message.includes("The query requires an index.")) {
-                  setError(`Failed to load your Q&A sessions: A Firestore index is missing. Check your browser console for a link to create it.`);
-              } else {
-                  setError(`Failed to load your Q&A sessions: ${sessionsError.message || "Unknown error."} Please check your Firestore rules and data.`);
-              }
-              setPageLoading(false);
-              return;
-          }
-
-        } catch (overallError: any) {
-          console.error("Overall error during data fetching:", overallError);
-          setError(`An unexpected error occurred during data fetching: ${overallError.message || "Unknown error."} Please try again.`);
-        } finally {
-          setPageLoading(false);
-        }
-      };
-
-      fetchExpertDataAndSessions();
+      // Initial fetch of sessions (not appending, no lastDoc)
+      fetchExpertDataAndSessions(null, false);
     }
-  }, [authLoading, isAuthenticated, isExpert, isApprovedExpert, user?.uid, userData, router]);
+  }, [authLoading, isAuthenticated, isExpert, isApprovedExpert, userData, router, fetchExpertDataAndSessions]);
+
 
   const isSessionUpcoming = (session: QASession) => {
     const startTimePart = session.time.split(" - ")[0];
     const sessionDateTime = new Date(`${session.date} ${startTimePart}`);
     const now = new Date();
-
     return sessionDateTime > now;
   };
 
-  const upcomingSessions = expertSessions.filter(isSessionUpcoming);
-  const pastSessions = expertSessions.filter((session) => !isSessionUpcoming(session));
+  // Helper function to reset form states
+  const resetForm = () => {
+    setCurrentSessionId(null);
+    setNewSessionTitle("");
+    setNewSessionDate(undefined);
+    setNewSessionStartHour('');
+    setNewSessionStartMinute('');
+    setNewSessionStartAmPm('AM');
+    setNewSessionEndHour('');
+    setNewSessionEndMinute('');
+    setNewSessionEndAmPm('PM');
+    setNewSessionDescription("");
+    setNewSessionTags("");
+    setNewSessionRegistrationLink("");
+    setError(null);
+  };
 
-  const handleCreateSession = async (e: React.FormEvent) => {
+  // --- CREATE/EDIT SESSION LOGIC ---
+  const handleOpenCreateSessionModal = () => {
+    resetForm();
+    setIsCreateEditSessionModalOpen(true);
+  };
+
+  const handleOpenEditSessionModal = (session: QASession) => {
+    setCurrentSessionId(session.id);
+    setNewSessionTitle(session.title);
+    setNewSessionDate(new Date(session.date));
+    setNewSessionDescription(session.description);
+    setNewSessionTags(session.tags.join(', '));
+    setNewSessionRegistrationLink(session.registrationLink || "");
+
+    const [startTime, endTime] = session.time.split(' - ');
+    const [startHourStr, startMinuteStr, startAmPm] = startTime.split(/:|\s/);
+    const [endHourStr, endMinuteStr, endAmPm] = endTime.split(/:|\s/);
+
+    setNewSessionStartHour(startHourStr);
+    setNewSessionStartMinute(startMinuteStr);
+    setNewSessionStartAmPm(startAmPm as "AM" | "PM");
+    setNewSessionEndHour(endHourStr);
+    setNewSessionEndMinute(endMinuteStr);
+    setNewSessionEndAmPm(endAmPm as "AM" | "PM");
+
+    setIsCreateEditSessionModalOpen(true);
+  };
+
+
+  const handleSubmitSession = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmittingSession(true);
     setError(null);
@@ -215,7 +320,7 @@ export default function ExpertSessionsPage() {
     const fullSessionTime = `${formattedStartTime} - ${formattedEndTime}`;
 
     if (!user?.uid || !expertPersonalData) {
-        setError("User or expert profile data is missing. Cannot create session.");
+        setError("User or expert profile data is missing. Cannot proceed.");
         setSubmittingSession(false);
         return;
     }
@@ -251,68 +356,181 @@ export default function ExpertSessionsPage() {
       const formattedDate = format(newSessionDate!, 'MMM dd,yyyy');
       const tagsArray = newSessionTags.split(',').map(tag => tag.trim()).filter(tag => tag);
 
-      // Derive initials with multiple fallbacks
       const sessionInitials = expertPersonalData.initials ||
                               ((userData?.firstName?.[0] || '') + (userData?.lastName?.[0] || '')).toUpperCase() ||
-                              'EX'; // Final fallback for initials (e.g., if no name data at all)
+                              'EX';
+      const sessionColor = expertPersonalData.color || '#60A5FA';
 
-      // Derive color with multiple fallbacks
-      // <--- EDITED: Removed 'userData?.color' from fallback to resolve TypeScript error
-      const sessionColor = expertPersonalData.color || '#60A5FA'; // Fallback color
-
-
-      const sessionData: Omit<QASession, 'id'> = {
+      const commonSessionData = {
         expertId: user!.uid,
         title: newSessionTitle,
         trainer: expertPersonalData.name || `${userData?.firstName || ''} ${userData?.lastName || ''}`.trim() || 'Unknown Expert',
         date: formattedDate,
         time: fullSessionTime,
-        attendees: 0,
         tags: tagsArray,
         initials: sessionInitials,
         color: sessionColor,
         description: newSessionDescription,
-        registrationLink: newSessionRegistrationLink || null,
-        recordingLink: null,
-        createdAt: Timestamp.now(),
+        registrationLink: newSessionRegistrationLink.trim() === "" ? null : newSessionRegistrationLink,
       };
 
-      await addDoc(collection(db, "qASessions"), sessionData);
-      console.log("New session created:", sessionData);
+      if (currentSessionId) {
+        const sessionRef = doc(db, "qASessions", currentSessionId);
+        await updateDoc(sessionRef, { ...commonSessionData });
+        toast.success("Q&A session updated successfully!");
+      } else {
+        await addDoc(collection(db, "qASessions"), {
+          ...commonSessionData,
+          attendees: 0,
+          createdAt: Timestamp.now(),
+          recordingLink: null,
+        });
+        toast.success("New Q&A session created successfully!");
+      }
 
-      const qaSessionsRef = collection(db, "qASessions");
-      const q = query(
-        qaSessionsRef,
-        where("expertId", "==", user!.uid),
-        orderBy("createdAt", "desc")
-      );
-      const querySnapshot = await getDocs(q);
-      const updatedSessionsList: QASession[] = querySnapshot.docs.map((doc) => {
-        const data = doc.data();
-        const sessionDate = data.date instanceof Timestamp ? format(data.date.toDate(), 'MMM dd,yyyy') : data.date;
-        return { id: doc.id, ...data, date: sessionDate } as QASession;
-      });
-      setExpertSessions(updatedSessionsList);
+      setIsCreateEditSessionModalOpen(false);
+      resetForm();
 
-      setNewSessionTitle("");
-      setNewSessionDate(undefined);
-      setNewSessionStartHour('');
-      setNewSessionStartMinute('');
-      setNewSessionStartAmPm('AM');
-      setNewSessionEndHour('');
-      setNewSessionEndMinute('');
-      setNewSessionEndAmPm('PM');
-      setNewSessionDescription("");
-      setNewSessionTags("");
-      setNewSessionRegistrationLink("");
-      setIsCreateSessionModalOpen(false);
+      // After create/edit, re-fetch the first page of sessions to reflect changes
+      setLastVisible(null); // Reset pagination
+      setHasMore(true);
+      fetchExpertDataAndSessions(null, false);
+
+
     } catch (err: any) {
-      console.error("Error creating new session:", err);
-      setError(`Failed to create session: ${err.message || "Unknown error."}`);
+      console.error("Error creating/updating session:", err);
+      setError(`Failed to save session: ${err.message || "Unknown error."}`);
+      toast.error(`Failed to save session: ${err.message || "Unknown error."}`);
     } finally {
       setSubmittingSession(false);
     }
   };
+
+
+  // --- DELETE SESSION LOGIC ---
+  const handleDeleteSession = (session: QASession) => {
+    setSessionToDelete(session);
+    setIsConfirmDeleteModalOpen(true);
+  };
+
+  const confirmDeleteSession = async () => {
+    if (!sessionToDelete || !user?.uid || user.uid !== sessionToDelete.expertId) {
+      toast.error("Unauthorized or invalid request to delete session.");
+      setIsConfirmDeleteModalOpen(false);
+      return;
+    }
+
+    setSubmittingDelete(true);
+    try {
+      const batch = writeBatch(db);
+      const sessionDocRef = doc(db, "qASessions", sessionToDelete.id);
+
+      const registrationsRef = collection(sessionDocRef, "registrations");
+      const registrationsSnapshot = await getDocs(registrationsRef);
+      registrationsSnapshot.docs.forEach((regDoc) => {
+        batch.delete(regDoc.ref);
+      });
+
+      batch.delete(sessionDocRef);
+
+      await batch.commit();
+
+      // Update local state by filtering out the deleted session
+      setExpertSessions(prevSessions => prevSessions.filter(s => s.id !== sessionToDelete.id));
+      toast.success("Session and all its registrations deleted successfully!");
+      setIsConfirmDeleteModalOpen(false);
+      setSessionToDelete(null);
+      // Re-fetch to ensure pagination state is consistent after deletion
+      setLastVisible(null);
+      setHasMore(true);
+      fetchExpertDataAndSessions(null, false);
+    } catch (err: any) {
+      console.error("Error deleting session:", err);
+      toast.error(`Failed to delete session: ${err.message || "Unknown error."}`);
+    } finally {
+      setSubmittingDelete(false);
+    }
+  };
+
+
+  // --- VIEW REGISTRATIONS LOGIC ---
+  const handleViewRegistrations = async (sessionId: string) => {
+    setLoadingRegistrations(true);
+    setSelectedSessionRegistrations([]);
+    try {
+      const registrationsRef = collection(db, `qASessions/${sessionId}/registrations`);
+      const q = query(registrationsRef, orderBy('registeredAt', 'asc'));
+      const snapshot = await getDocs(q);
+
+      const registrationsList: Registration[] = snapshot.docs.map(docSnapshot => ({
+        id: docSnapshot.id,
+        ...docSnapshot.data() as Omit<Registration, 'id'>,
+        registeredAt: docSnapshot.data().registeredAt
+      }));
+      setSelectedSessionRegistrations(registrationsList);
+      setIsViewRegistrationsModalOpen(true);
+    } catch (err: any) {
+      console.error("Error fetching registrations:", err);
+      toast.error(`Failed to fetch registrations: ${err.message || "Unknown error."}`);
+    } finally {
+      setLoadingRegistrations(false);
+    }
+  };
+
+  const copyEmailsToClipboard = () => {
+    const emails = selectedSessionRegistrations.map(reg => reg.userEmail).join(', ');
+    if (emails) {
+      const textArea = document.createElement("textarea");
+      textArea.value = emails;
+      // Make the textarea invisible and outside the viewport
+      textArea.style.position = "fixed";
+      textArea.style.top = "0";
+      textArea.style.left = "0";
+      textArea.style.width = "2em";
+      textArea.style.height = "2em";
+      textArea.style.padding = "0";
+      textArea.style.border = "none";
+      textArea.style.outline = "none";
+      textArea.style.boxShadow = "none";
+      textArea.style.background = "transparent";
+      textArea.style.opacity = "0"; // Ensure it's invisible
+
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+
+      let successful = false;
+      try {
+        console.log("Attempting to copy emails...");
+        successful = document.execCommand('copy');
+        console.log("document.execCommand('copy') result:", successful);
+      } catch (err) {
+        console.error("Failed to copy emails using execCommand:", err);
+        successful = false;
+      } finally {
+        document.body.removeChild(textArea); // Always remove the textarea
+      }
+
+      if (successful) {
+        toast.success("Emails copied to clipboard!");
+      } else {
+        toast.error("Failed to copy emails to clipboard. Please try manually.");
+      }
+    } else {
+      toast.info("No emails to copy.");
+    }
+  };
+
+  const handleLoadMore = () => {
+    if (hasMore && !pageLoading) {
+      fetchExpertDataAndSessions(lastVisible, true);
+    }
+  };
+
+  // Filter sessions based on upcoming/past status
+  const upcomingSessions = expertSessions.filter(isSessionUpcoming);
+  const pastSessions = expertSessions.filter((session) => !isSessionUpcoming(session));
+
 
   if (authLoading || pageLoading) {
     return (
@@ -343,8 +561,7 @@ export default function ExpertSessionsPage() {
       );
   }
 
-  // Helper arrays for time selection
-  const hours = Array.from({ length: 12 }, (_, i) => String(i + 1)); // 1 to 12
+  const hours = Array.from({ length: 12 }, (_, i) => String(i + 1));
   const minutes = ['00', '15', '30', '45'];
 
 
@@ -360,7 +577,7 @@ export default function ExpertSessionsPage() {
           </Link>
           <h1 className="text-3xl font-bold">My Q&A Sessions</h1>
         </div>
-        <Button onClick={() => setIsCreateSessionModalOpen(true)} className="gap-2">
+        <Button onClick={handleOpenCreateSessionModal} className="gap-2">
           <PlusCircle className="h-4 w-4" />
           Create New Session
         </Button>
@@ -412,7 +629,7 @@ export default function ExpertSessionsPage() {
                       </div>
                       <div className="flex items-center gap-2 text-sm text-muted-foreground">
                         <Users className="h-4 w-4" />
-                        <span>{session.attendees} attending</span>
+                        <span>{session.attendees} students registered</span>
                       </div>
                       <div className="flex flex-wrap gap-2 mt-4">
                         {session.tags.map((tag, i) => (
@@ -423,15 +640,28 @@ export default function ExpertSessionsPage() {
                       </div>
                     </div>
                   </CardContent>
-                  <CardFooter className="flex justify-between">
-                    {session.registrationLink ? (
-                      <Button size="sm" asChild>
-                        <Link href={session.registrationLink}>View/Edit Session</Link>
-                      </Button>
-                    ) : (
-                      <Button size="sm" disabled>
-                        No Registration Link
-                      </Button>
+                  <CardFooter className="flex flex-wrap justify-end gap-2 pt-4">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleViewRegistrations(session.id)}
+                      disabled={loadingRegistrations}
+                    >
+                      {loadingRegistrations ? (
+                        <> <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading... </>
+                      ) : (
+                        <> <List className="mr-2 h-4 w-4" /> View Registrations </>
+                      )}
+                    </Button>
+                    {(user?.uid === session.expertId) && (
+                      <>
+                        <Button size="sm" variant="outline" onClick={() => handleOpenEditSessionModal(session)}>
+                          <Pencil className="mr-2 h-4 w-4" /> Edit
+                        </Button>
+                        <Button size="sm" variant="destructive" onClick={() => handleDeleteSession(session)} disabled={submittingDelete}>
+                          <Trash2 className="mr-2 h-4 w-4" /> Delete
+                        </Button>
+                      </>
                     )}
                   </CardFooter>
                 </Card>
@@ -484,7 +714,7 @@ export default function ExpertSessionsPage() {
                       </div>
                       <div className="flex items-center gap-2 text-sm text-muted-foreground">
                         <Users className="h-4 w-4" />
-                        <span>{session.attendees} attended</span>
+                        <span>{session.attendees} students registered</span>
                       </div>
                       <div className="flex flex-wrap gap-2 mt-4">
                         {session.tags.map((tag, i) => (
@@ -495,7 +725,7 @@ export default function ExpertSessionsPage() {
                       </div>
                     </div>
                   </CardContent>
-                  <CardFooter className="flex justify-center">
+                  <CardFooter className="flex flex-wrap justify-end gap-2 pt-4">
                     {session.recordingLink ? (
                       <Button variant="outline" asChild>
                         <Link href={session.recordingLink}>Watch Recording</Link>
@@ -504,6 +734,16 @@ export default function ExpertSessionsPage() {
                       <Button variant="outline" disabled>
                         Recording Not Available
                       </Button>
+                    )}
+                     {(user?.uid === session.expertId) && (
+                      <>
+                        <Button size="sm" variant="outline" onClick={() => handleOpenEditSessionModal(session)}>
+                          <Pencil className="mr-2 h-4 w-4" /> Edit
+                        </Button>
+                        <Button size="sm" variant="destructive" onClick={() => handleDeleteSession(session)} disabled={submittingDelete}>
+                          <Trash2 className="mr-2 h-4 w-4" /> Delete
+                        </Button>
+                      </>
                     )}
                   </CardFooter>
                 </Card>
@@ -517,16 +757,30 @@ export default function ExpertSessionsPage() {
         </TabsContent>
       </Tabs>
 
-      {/* Create Session Modal */}
-      <Dialog open={isCreateSessionModalOpen} onOpenChange={setIsCreateSessionModalOpen}>
+      {hasMore && (
+        <div className="flex justify-center mt-8">
+          <Button onClick={handleLoadMore} disabled={pageLoading} variant="outline">
+            {pageLoading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading More...
+              </>
+            ) : (
+              "Load More"
+            )}
+          </Button>
+        </div>
+      )}
+
+      {/* Create/Edit Session Modal */}
+      <Dialog open={isCreateEditSessionModalOpen} onOpenChange={setIsCreateEditSessionModalOpen}>
         <DialogContent className="sm:max-w-[420px] p-4">
           <DialogHeader className="mb-4">
-            <DialogTitle>Create New Q&A Session</DialogTitle>
+            <DialogTitle>{currentSessionId ? "Edit Q&A Session" : "Create New Q&A Session"}</DialogTitle>
             <DialogDescription>
-              Fill in the details for your upcoming Q&A session.
+              {currentSessionId ? "Update the details of your session." : "Fill in the details for your upcoming Q&A session."}
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleCreateSession} className="grid gap-y-3 gap-x-2">
+          <form onSubmit={handleSubmitSession} className="grid gap-y-3 gap-x-2">
             {error && <p className="text-red-500 text-sm mb-2 col-span-full">{error}</p>}
 
             {/* Title */}
@@ -685,9 +939,85 @@ export default function ExpertSessionsPage() {
             </div>
 
             <Button type="submit" disabled={submittingSession} className="mt-4 col-span-full">
-              {submittingSession ? "Creating Session..." : "Create Session"}
+              {submittingSession ? (
+                <> <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving... </>
+              ) : (
+                currentSessionId ? "Save Changes" : "Create Session"
+              )}
             </Button>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirmation Dialog for Deletion */}
+      <Dialog open={isConfirmDeleteModalOpen} onOpenChange={setIsConfirmDeleteModalOpen}>
+        <DialogContent className="p-6">
+          <DialogHeader>
+            <DialogTitle>Confirm Deletion</DialogTitle>
+            <DialogDescription className="mt-1">
+              Are you sure you want to delete the session "{sessionToDelete?.title}"? This action cannot be undone. All associated registrations will also be deleted.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsConfirmDeleteModalOpen(false)} disabled={submittingDelete}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmDeleteSession} disabled={submittingDelete}>
+              {submittingDelete ? (
+                <> <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Deleting... </>
+              ) : (
+                "Delete Session"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Registrations Modal */}
+      <Dialog open={isViewRegistrationsModalOpen} onOpenChange={setIsViewRegistrationsModalOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Registered Students</DialogTitle>
+            <DialogDescription>
+              {selectedSessionRegistrations.length} students have registered.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4 max-h-[300px] overflow-y-auto custom-scrollbar">
+            {selectedSessionRegistrations.length > 0 ? (
+              <ul className="space-y-2">
+                {selectedSessionRegistrations.map((reg) => (
+                  <li key={reg.id} className="flex items-center justify-between text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
+                    <div className="flex items-center gap-2">
+                      <Avatar className="h-7 w-7">
+                        <AvatarFallback className="text-xs bg-blue-100 text-blue-800">
+                          {reg.userName ? reg.userName.charAt(0).toUpperCase() : 'U'}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <p className="font-medium">{reg.userName || 'Unknown User'}</p>
+                        <p className="text-muted-foreground text-xs">{reg.userEmail || 'No email'}</p>
+                      </div>
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      Registered: {reg.registeredAt?.toDate().toLocaleDateString()}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-center text-muted-foreground">No students registered yet.</p>
+            )}
+          </div>
+          <DialogFooter>
+            {selectedSessionRegistrations.length > 0 && (
+              <Button onClick={copyEmailsToClipboard} size="sm" variant="outline">
+                <ClipboardCopy className="mr-2 h-4 w-4" /> Copy All Emails
+              </Button>
+            )}
+            <Button type="button" onClick={() => setIsViewRegistrationsModalOpen(false)} size="sm">
+              Close
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

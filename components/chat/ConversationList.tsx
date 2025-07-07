@@ -52,28 +52,38 @@ export default function ConversationList({ currentUserId, onSelectConversation, 
       const fetchedConversations: ConversationItem[] = [];
       snapshot.forEach((doc) => {
         const data = doc.data();
-        let otherParticipantId = '';
-        let otherParticipantName = 'Unknown User';
+        let otherParticipantId = ''; // Initialize
+        let otherParticipantName = 'Unknown User'; // Initialize
 
-        // Determine the other participant's ID and name
+        const participantUids = data.participants as string[];
+        const participantNamesMap = data.participantNames as { [uid: string]: string };
+
         if (isAdminView) {
-            // For admin, just display who is on the other end, it could be either.
-            // This is a simplification; a real admin view might show both participants.
-            const participantUids = data.participants as string[];
-            const participantNames = data.participantNames as { [uid: string]: string };
+            // For admin, otherParticipantId can be the ID of the first participant
+            // This is primarily to ensure selectedChatPartnerId is not null/empty
+            // The ChatInterface will use conversationId to fetch all messages.
+            if (participantUids && participantUids.length > 0) {
+                otherParticipantId = participantUids[0]; // Take the first participant's ID
 
-            // Find a name that is not 'Unknown User' and prioritize student/expert names
-            otherParticipantName = Object.values(participantNames).find(name => name !== 'Unknown User' && name !== 'You') || 'Two Users';
-            // Simple display for admin: combine names or use a generic if not enough info
-            if(participantUids && participantUids.length === 2 && participantNames) {
-              const [id1, id2] = participantUids;
-              otherParticipantName = `${participantNames[id1] || 'User 1'} & ${participantNames[id2] || 'User 2'}`;
+                // Construct a combined name for admin view
+                if (participantUids.length === 2) {
+                    const [id1, id2] = participantUids;
+                    const name1 = participantNamesMap[id1] || `User ${id1.substring(0, 4)}`;
+                    const name2 = participantNamesMap[id2] || `User ${id2.substring(0, 4)}`;
+                    otherParticipantName = `${name1} & ${name2}`;
+                } else if (participantUids.length === 1) {
+                    otherParticipantName = participantNamesMap[participantUids[0]] || `User ${participantUids[0].substring(0, 4)}`;
+                } else {
+                    otherParticipantName = 'Multiple Users'; // Fallback for more than 2 or unexpected
+                }
+            } else {
+                otherParticipantName = 'No Participants'; // Should not happen for valid conversations
             }
 
         } else {
             // For student/expert, find the other participant in the conversation
-            otherParticipantId = (data.participants as string[]).find((uid) => uid !== currentUserId) || '';
-            otherParticipantName = (data.participantNames as { [uid: string]: string })[otherParticipantId] || 'Unknown User';
+            otherParticipantId = participantUids.find((uid) => uid !== currentUserId) || '';
+            otherParticipantName = participantNamesMap[otherParticipantId] || 'Unknown User';
         }
 
 
@@ -81,8 +91,8 @@ export default function ConversationList({ currentUserId, onSelectConversation, 
           id: doc.id,
           lastMessage: data.lastMessage || 'No messages yet.',
           lastMessageTimestamp: data.lastMessageTimestamp,
-          otherParticipantId: otherParticipantId,
-          otherParticipantName: otherParticipantName,
+          otherParticipantId: otherParticipantId, // Now correctly set for admin view too
+          otherParticipantName: otherParticipantName, // Now correctly set for admin view too
           participants: data.participants,
         });
       });

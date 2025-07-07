@@ -13,7 +13,7 @@ import Chatbot from "@/components/chatbot";
 import PWAInstaller from "@/components/pwa-installer";
 import OfflineBanner from "@/components/offline-banner";
 import RegisterServiceWorker from "./register-sw";
-import { Toaster } from "@/components/ui/toaster";
+import { Toaster } from "sonner"; // <--- Changed import path to 'sonner'
 import { AuthProvider } from "./context/authContext";
 
 const inter = Inter({ subsets: ["latin"] });
@@ -30,8 +30,8 @@ export default function RootLayout({
 }>) {
   const pathname = usePathname(); // <--- Get the current path
 
-  // Define routes where the footer should be hidden
-  const hideFooterRoutes = ['/chat']; // Add '/chat' to hide footer on chat page
+  // Define routes where the footer and chatbot should be hidden
+  const hideChatbotAndFooterRoutes = ['/chat']; // Added '/chat' to hide chatbot on chat page
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -47,12 +47,13 @@ export default function RootLayout({
               <Navbar />
               <main className="flex-1">{children}</main>
               {/* Conditionally render the Footer */}
-              {!hideFooterRoutes.includes(pathname) && <Footer />} {/* <--- Modified line */}
-              <Chatbot />
+              {!hideChatbotAndFooterRoutes.includes(pathname) && <Footer />}
+              {/* Conditionally render the Chatbot */}
+              {!hideChatbotAndFooterRoutes.includes(pathname) && <Chatbot />}
               <PWAInstaller />
               <OfflineBanner />
               <RegisterServiceWorker />
-              <Toaster />
+              <Toaster position="top-center" />
             </div>
           </ThemeProvider>
         </AuthProvider>

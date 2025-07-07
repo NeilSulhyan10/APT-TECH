@@ -1,7 +1,7 @@
 // app/qa-sessions/page.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 // Import your Firestore db instance, and necessary functions
 import { db } from "@/app/firebase/firebaseClient";
 import {
@@ -9,14 +9,19 @@ import {
   query,
   orderBy,
   getDocs,
-  doc, // Import doc
-  updateDoc, // Import updateDoc
-  setDoc, // Import setDoc
-  getDoc, // Import getDoc
-  Timestamp, // Import Timestamp
+  doc,
+  updateDoc,
+  setDoc,
+  getDoc,
+  Timestamp,
+  limit,
+  startAfter,
+  DocumentData,
+  QueryDocumentSnapshot,
 } from "firebase/firestore";
 
-import { useAuth } from '@/app/context/authContext'; // Import your AuthContext
+import { useAuth } from '@/app/context/authContext';
+import { format } from 'date-fns';
 
 import {
   Card,
@@ -29,11 +34,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Calendar, Clock, Users, Bell, Filter, Search, Loader2 } from "lucide-react"; // Added Loader2
+import { Calendar, Clock, Users, Bell, Filter, Search, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import Link from "next/link";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { toast } from 'sonner'; // Assuming you use a toast notification library like Sonner
+import { toast } from 'sonner';
 
 import {
   DropdownMenu,
@@ -44,94 +49,131 @@ import {
   DropdownMenuCheckboxItem,
 } from "@/components/ui/dropdown-menu";
 
+// Removed Dialog imports as the modal functionality is being removed
+// import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+
+
 interface QASession {
   id: string;
   title: string;
   trainer: string;
   date: string;
   time: string;
-  attendees: number; // This will now represent the count from the 'registrations' subcollection
+  attendees: number;
   tags: string[];
   initials: string;
   color: string;
   description: string;
   registrationLink?: string;
   recordingLink?: string;
-  // New field to track if the current user is registered for this session
+  createdAt: Timestamp;
   isRegistered?: boolean;
 }
 
+const ITEMS_PER_PAGE = 6;
+
 export default function QASessionsPage() {
-  const { user, isAuthenticated, userData } = useAuth(); // Get user and authentication state
+  const { user, isAuthenticated, userData } = useAuth();
   const [sessions, setSessions] = useState<QASession[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [allTags, setAllTags] = useState<string[]>([]);
-  const [registeringSessionId, setRegisteringSessionId] = useState<string | null>(null); // To track which session is being registered
+  const [registeringSessionId, setRegisteringSessionId] = useState<string | null>(null);
+
+  // Pagination states
+  const [lastVisible, setLastVisible] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+
+  // Removed Session Detail Modal states
+  // const [isSessionDetailModalOpen, setIsSessionDetailModalOpen] = useState(false);
+  // const [selectedSession, setSelectedSession = useState<QASession | null>(null);
+
 
   const currentUserId = user?.uid;
   const currentUserName = userData?.firstName && userData?.lastName
     ? `${userData.firstName} ${userData.lastName}`
     : userData?.firstName || userData?.email || 'Guest';
 
-  useEffect(() => {
-    const fetchQASessions = async () => {
-      try {
-        setLoading(true);
-        const qaSessionsCollection = collection(db, "qASessions");
-        const q = query(qaSessionsCollection, orderBy("date", "desc"));
-        const querySnapshot = await getDocs(q);
+  // Function to fetch Q&A sessions from Firestore
+  const fetchQASessions = useCallback(async (lastDoc: QueryDocumentSnapshot<DocumentData> | null, append: boolean = false) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const qaSessionsCollection = collection(db, "qASessions");
+      let q = query(qaSessionsCollection, orderBy("createdAt", "desc"));
 
-        const sessionsList: QASession[] = [];
-        const uniqueTags = new Set<string>();
+      if (lastDoc) {
+        q = query(q, startAfter(lastDoc));
+      }
 
-        for (const docSnapshot of querySnapshot.docs) {
-          const sessionData = docSnapshot.data() as Omit<QASession, 'id' | 'attendees' | 'isRegistered'>;
-          
-          // Fetch registrations subcollection count
-          const registrationsRef = collection(db, `qASessions/${docSnapshot.id}/registrations`);
-          const registrationsSnapshot = await getDocs(registrationsRef);
-          const attendeesCount = registrationsSnapshot.size;
+      q = query(q, limit(ITEMS_PER_PAGE));
 
-          // Check if current user is registered
-          let isRegistered = false;
-          if (isAuthenticated && currentUserId) {
-            const userRegistrationDoc = await getDoc(doc(registrationsRef, currentUserId));
-            isRegistered = userRegistrationDoc.exists();
-          }
+      const querySnapshot = await getDocs(q);
 
-          sessionsList.push({
-            id: docSnapshot.id,
-            ...sessionData,
-            attendees: attendeesCount,
-            isRegistered: isRegistered,
-          });
+      const sessionsList: QASession[] = [];
+      const uniqueTags = new Set<string>();
 
-          // Collect all tags
-          sessionData.tags.forEach(tag => uniqueTags.add(tag));
+      for (const docSnapshot of querySnapshot.docs) {
+        const rawData = docSnapshot.data();
+
+        const sessionDate = rawData.date instanceof Timestamp
+          ? format(rawData.date.toDate(), 'MMM dd,yyyy')
+          : rawData.date;
+
+        const registrationsRef = collection(db, `qASessions/${docSnapshot.id}/registrations`);
+        const registrationsSnapshot = await getDocs(registrationsRef);
+        const attendeesCount = registrationsSnapshot.size;
+
+        let isRegistered = false;
+        if (isAuthenticated && currentUserId) {
+          const userRegistrationDoc = await getDoc(doc(registrationsRef, currentUserId));
+          isRegistered = userRegistrationDoc.exists();
         }
 
-        console.log("Fetched Sessions from Firestore (Processed Data):", sessionsList);
-        setSessions(sessionsList);
-        setAllTags(Array.from(uniqueTags).sort());
+        sessionsList.push({
+          id: docSnapshot.id,
+          title: rawData.title,
+          trainer: rawData.trainer,
+          date: sessionDate,
+          time: rawData.time,
+          attendees: attendeesCount,
+          tags: rawData.tags || [],
+          initials: rawData.initials,
+          color: rawData.color,
+          description: rawData.description,
+          registrationLink: rawData.registrationLink,
+          recordingLink: rawData.recordingLink,
+          createdAt: rawData.createdAt,
+          isRegistered: isRegistered,
+        });
 
-      } catch (err) {
-        console.error("Error fetching Q&A sessions:", err);
-        setError("Failed to load Q&A sessions. Please try again later.");
-      } finally {
-        setLoading(false);
+        (rawData.tags || []).forEach((tag: string) => uniqueTags.add(tag));
       }
-    };
 
-    fetchQASessions();
-  }, [isAuthenticated, currentUserId]); // Rerun if auth state changes
+      console.log("Fetched Sessions from Firestore (Raw Query Result Count):", sessionsList.length);
+      setSessions((prevSessions) => (append ? [...prevSessions, ...sessionsList] : sessionsList));
+      setLastVisible(querySnapshot.docs[querySnapshot.docs.length - 1] || null);
+      setHasMore(sessionsList.length === ITEMS_PER_PAGE);
+      console.log("Has More (after fetch):", sessionsList.length === ITEMS_PER_PAGE);
+
+      setAllTags(Array.from(uniqueTags).sort());
+
+    } catch (err) {
+      console.error("Error fetching Q&A sessions:", err);
+      setError("Failed to load Q&A sessions. Please try again later.");
+    } finally {
+      setLoading(false);
+    }
+  }, [isAuthenticated, currentUserId]);
+
+  useEffect(() => {
+    fetchQASessions(null, false);
+  }, [fetchQASessions]);
 
   const isSessionUpcoming = (session: QASession) => {
-    // Robust date parsing (consider using a library like date-fns or moment.js for more complex cases)
-    // Assuming session.date is "YYYY-MM-DD" and session.time is "HH:MM AM/PM - HH:MM AM/PM"
-    const startTimePart = session.time.split(" - ")[0]; 
+    const startTimePart = session.time.split(" - ")[0];
     const sessionDateTime = new Date(`${session.date} ${startTimePart}`);
     const now = new Date();
 
@@ -139,7 +181,12 @@ export default function QASessionsPage() {
   };
 
   const handleRegister = async (session: QASession) => {
+    console.log("handleRegister: isAuthenticated:", isAuthenticated);
+    console.log("handleRegister: currentUserId:", currentUserId);
+
     if (!isAuthenticated || !currentUserId) {
+      console.log("handleRegister: Condition !isAuthenticated || !currentUserId is:", !isAuthenticated || !currentUserId);
+      console.log("handleRegister: Displaying login toast.");
       toast.error("Please log in to register for a session.");
       return;
     }
@@ -148,23 +195,19 @@ export default function QASessionsPage() {
       return;
     }
     if (registeringSessionId === session.id) {
-        // Already trying to register for this session
         return;
     }
 
-    setRegisteringSessionId(session.id); // Set the session being registered
+    setRegisteringSessionId(session.id);
 
     try {
       const registrationDocRef = doc(db, `qASessions/${session.id}/registrations/${currentUserId}`);
-      const sessionDocRef = doc(db, 'qASessions', session.id);
 
-      // Check one last time if already registered to prevent race conditions
       const existingRegistration = await getDoc(registrationDocRef);
       if (existingRegistration.exists()) {
         toast.info("You are already registered for this session.");
         setRegisteringSessionId(null);
-        // Optionally, update the local state to reflect this if it wasn't caught earlier
-        setSessions(prevSessions => prevSessions.map(s => 
+        setSessions(prevSessions => prevSessions.map(s =>
             s.id === session.id ? { ...s, isRegistered: true } : s
         ));
         return;
@@ -174,17 +217,9 @@ export default function QASessionsPage() {
         registeredAt: Timestamp.now(),
         userId: currentUserId,
         userName: currentUserName,
-        userEmail: userData?.email || 'N/A', // Add user's email if available
+        userEmail: userData?.email || 'N/A',
       });
 
-      // Atomically increment the attendees count in the main session document (optional but good for denormalization)
-      // NOTE: This requires 'attendees' field to exist and be a number in your qASession document initially.
-      // If you are relying solely on the subcollection count, you can remove this update.
-      // For simplicity, let's just rely on the subcollection size for display.
-      // If you want to store a direct `attendees` count on the main document, you'd fetch, increment, and update it.
-      // E.g., await updateDoc(sessionDocRef, { attendees: increment(1) }); (requires FieldValue.increment)
-
-      // Update the local state to reflect the registration
       setSessions(prevSessions =>
         prevSessions.map(s =>
           s.id === session.id
@@ -195,7 +230,6 @@ export default function QASessionsPage() {
 
       toast.success(`Successfully registered for "${session.title}"!`);
 
-      // If there's an external registration link, open it after successful Firestore registration
       if (session.registrationLink) {
         window.open(session.registrationLink, '_blank');
       }
@@ -204,7 +238,7 @@ export default function QASessionsPage() {
       console.error("Error registering for session:", err);
       toast.error("Failed to register. Please try again.");
     } finally {
-      setRegisteringSessionId(null); // Clear the registering state
+      setRegisteringSessionId(null);
     }
   };
 
@@ -224,6 +258,43 @@ export default function QASessionsPage() {
 
   const upcomingSessions = filteredSessions.filter(isSessionUpcoming);
   const pastSessions = filteredSessions.filter((session) => !isSessionUpcoming(session));
+
+  const handleLoadMore = () => {
+    if (hasMore && !loading) {
+      fetchQASessions(lastVisible, true);
+    }
+  };
+
+  const handleTabChange = (value: string) => {
+    setSessions([]);
+    setLastVisible(null);
+    setHasMore(true);
+    setSearchTerm("");
+    setSelectedTags([]);
+    fetchQASessions(null, false);
+  };
+
+  // Removed Session Detail Modal Handlers
+  // const handleOpenSessionDetail = (session: QASession) => {
+  //   console.log("handleOpenSessionDetail: Session clicked:", { id: session.id, title: session.title });
+  //   setSelectedSession(session);
+  //   console.log("handleOpenSessionDetail: selectedSession state after set:", { id: session.id, title: session.title }); // Log after set
+  //   setIsSessionDetailModalOpen(true);
+  // };
+
+  // const handleCloseSessionDetail = () => {
+  //   setIsSessionDetailModalOpen(false);
+  //   setSelectedSession(null); // Clear selected session when modal closes
+  // };
+
+
+  // Log current state lengths for debugging
+  useEffect(() => {
+    console.log("Total Sessions in state:", sessions.length);
+    console.log("Upcoming Sessions displayed:", upcomingSessions.length);
+    console.log("Past Sessions displayed:", pastSessions.length);
+  }, [sessions, upcomingSessions, pastSessions]);
+
 
   if (loading) {
     return (
@@ -305,10 +376,10 @@ export default function QASessionsPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="upcoming" className="mb-8">
+      <Tabs defaultValue="upcoming" className="mb-8" onValueChange={handleTabChange}>
         <TabsList className="grid w-full grid-cols-2 mb-8">
-          <TabsTrigger value="upcoming">Upcoming Sessions</TabsTrigger>
-          <TabsTrigger value="past">Past Sessions</TabsTrigger>
+          <TabsTrigger value="upcoming">Upcoming Sessions ({upcomingSessions.length})</TabsTrigger>
+          <TabsTrigger value="past">Past Sessions ({pastSessions.length})</TabsTrigger>
         </TabsList>
 
         <TabsContent value="upcoming" className="mt-0">
@@ -317,13 +388,14 @@ export default function QASessionsPage() {
               upcomingSessions.map((session) => (
                 <Card
                   key={session.id}
-                  className="overflow-hidden hover:shadow-md transition-shadow"
+                  className="overflow-hidden hover:shadow-md transition-shadow" // Removed cursor-pointer and onClick
                 >
                   <CardHeader>
                     <div className="flex items-center gap-4">
                       <Avatar className="w-16 h-16">
                         <AvatarFallback
-                          className={`bg-${session.color}-600 text-white text-xl font-bold`}
+                          style={{ backgroundColor: session.color || '#60A5FA' }}
+                          className={`text-white text-xl font-bold`}
                         >
                           {session.initials}
                         </AvatarFallback>
@@ -349,7 +421,7 @@ export default function QASessionsPage() {
                       </div>
                       <div className="flex items-center gap-2 text-sm text-muted-foreground">
                         <Users className="h-4 w-4" />
-                        <span>{session.attendees} attending</span> {/* Display updated count */}
+                        <span>{session.attendees} attending</span>
                       </div>
                       <div className="flex flex-wrap gap-2 mt-4">
                         {session.tags.map((tag, i) => (
@@ -367,11 +439,11 @@ export default function QASessionsPage() {
                         Remind Me
                       </Link>
                     </Button>
-                    {/* Modified Register Button */}
                     <Button
                       size="sm"
-                      onClick={() => handleRegister(session)}
-                      disabled={!isAuthenticated || session.isRegistered || registeringSessionId === session.id} // Disable if not logged in, already registered, or currently registering this session
+                      onClick={(e) => { e.stopPropagation(); handleRegister(session); }}
+                      // Removed !isAuthenticated from disabled condition here
+                      disabled={session.isRegistered || registeringSessionId === session.id}
                     >
                         {registeringSessionId === session.id ? (
                             <>
@@ -400,13 +472,14 @@ export default function QASessionsPage() {
               pastSessions.map((session) => (
                 <Card
                   key={session.id}
-                  className="overflow-hidden hover:shadow-md transition-shadow opacity-70"
+                  className="overflow-hidden hover:shadow-md transition-shadow opacity-70" // Removed cursor-pointer and onClick
                 >
                   <CardHeader>
                     <div className="flex items-center gap-4">
                       <Avatar className="w-16 h-16">
                         <AvatarFallback
-                          className={`bg-${session.color}-600 text-white text-xl font-bold`}
+                          style={{ backgroundColor: session.color || '#60A5FA' }}
+                          className={`text-white text-xl font-bold`}
                         >
                           {session.initials}
                         </AvatarFallback>
@@ -464,6 +537,96 @@ export default function QASessionsPage() {
           </div>
         </TabsContent>
       </Tabs>
+
+      {hasMore && (
+        <div className="flex justify-center mt-8">
+          <Button onClick={handleLoadMore} disabled={loading} variant="outline">
+            {loading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading More...
+              </>
+            ) : (
+              "Load More"
+            )}
+          </Button>
+        </div>
+      )}
+
+      {/* Removed Session Detail Modal */}
+      {/* <Dialog open={isSessionDetailModalOpen} onOpenChange={handleCloseSessionDetail}>
+        <DialogContent className="sm:max-w-[500px] p-6">
+          {selectedSession && (
+            <>
+              {console.log("Session Detail Modal: Rendering with selectedSession:", { id: selectedSession.id, title: selectedSession.title })}
+              <DialogHeader>
+                <DialogTitle className="text-2xl font-bold">{selectedSession.title}</DialogTitle>
+                <DialogDescription className="mt-1">
+                  with {selectedSession.trainer}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="my-4 space-y-3">
+                <p className="text-sm text-muted-foreground">{selectedSession.description}</p>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Calendar className="h-4 w-4" />
+                  <span>{selectedSession.date}</span>
+                </div>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Clock className="h-4 w-4" />
+                  <span>{selectedSession.time}</span>
+                </div>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Users className="h-4 w-4" />
+                  <span>{selectedSession.attendees} attending</span>
+                </div>
+                <div className="flex flex-wrap gap-2 mt-4">
+                  {selectedSession.tags.map((tag, i) => (
+                    <Badge key={i} variant="secondary">
+                      {tag}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex justify-between mt-4">
+                <Button variant="outline" size="sm" asChild>
+                  <Link href={`/reminders/${selectedSession.id}`}>
+                    <Bell className="mr-2 h-4 w-4" />
+                    Remind Me
+                  </Link>
+                </Button>
+                {isSessionUpcoming(selectedSession) ? (
+                  <Button
+                    size="sm"
+                    onClick={() => handleRegister(selectedSession)}
+                    disabled={!isAuthenticated || selectedSession.isRegistered || registeringSessionId === selectedSession.id}
+                  >
+                      {registeringSessionId === selectedSession.id ? (
+                          <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Registering...
+                          </>
+                      ) : selectedSession.isRegistered ? (
+                          "Registered"
+                      ) : (
+                          "Register Now"
+                      )}
+                  </Button>
+                ) : (
+                  selectedSession.recordingLink ? (
+                    <Button variant="outline" asChild>
+                      <Link href={selectedSession.recordingLink}>Watch Recording</Link>
+                    </Button>
+                  ) : (
+                    <Button variant="outline" disabled>
+                      Recording Not Available
+                    </Button>
+                  )
+                )}
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog> */}
     </div>
   );
 }
